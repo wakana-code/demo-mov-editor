@@ -286,6 +286,35 @@ VC.opening = {
   },
 };
 
+// 先頭タイトルカード：ほんの一瞬（数フレーム）アプリ名を出してサムネにする
+VC.sting = {
+  duration(P) { const d = Number(P.output && P.output.sting); return d > 0 ? d : 0; },
+  draw(ctx, W, H, P, images) {
+    const name = String((P.ending && P.ending.text) || P.name || "ReelCut").trim() || "ReelCut";
+    ctx.fillStyle = "#0b0d12";
+    ctx.fillRect(0, 0, W, H);
+    // モンタージュ画像があれば、ぼかして暗くした背景に（動画の雰囲気に合わせる）
+    const first = P.opening && P.opening.images && P.opening.images[0];
+    const img = first && images ? images[first.id] : null;
+    if (img && img.naturalWidth) {
+      ctx.save();
+      ctx.filter = `blur(${Math.round(H * 0.025)}px) brightness(0.45) saturate(1.2)`;
+      const sc = Math.max(W / img.naturalWidth, H / img.naturalHeight) * 1.15;
+      const dw = img.naturalWidth * sc, dh = img.naturalHeight * sc;
+      ctx.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
+      ctx.restore();
+    } else {
+      const g = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, Math.max(W, H) * 0.7);
+      g.addColorStop(0, "#1e2235"); g.addColorStop(1, "#07080c");
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    }
+    const r = VC.text.drawCentered(ctx, W, H, name, { sizeRatio: H > W ? 0.085 : 0.11, weight: 800, dy: -H * 0.01 });
+    const lineW = Math.min(W * 0.18, r.size * 2.2);
+    ctx.fillStyle = "#a5b4fc";
+    ctx.fillRect(W / 2 - lineW / 2, H / 2 + r.size * r.lines * 0.72, lineW, Math.max(2, Math.round(H * 0.004)));
+  },
+};
+
 // エンディング：タイピング風にアプリ名
 VC.ending = {
   defaults() { return { enabled: true, text: "AI-PM", sub: "", charDur: 0.09, hold: 1.8 }; },

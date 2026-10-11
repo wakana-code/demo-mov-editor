@@ -14,21 +14,25 @@
   const SPEEDS = [1.5, 2, 3, 4, 8, 16];
 
   // ---------- state ----------
-  let P = loadProject();
+  let P = normalizeProject(store.getCurrentProject());
   const S = {
     T: 0, playing: false, tab: "opening", active: null, lastTick: 0,
     drag: null, sel: null, scrubSrc: null, pop: null, selectedRange: null,
     exporting: false, cancelExport: false, lastDown: 0, lastDownX: 0, mp4ok: null,
   };
 
-  function loadProject() {
-    const saved = store.loadProject() || {};
+  function normalizeProject(saved) {
+    saved = saved || {};
     const p = {
+      id: saved.id || store.uid("p"),
+      name: saved.name || "動画",
+      created_at: saved.created_at || new Date().toISOString(),
       opening: Object.assign(VC.opening.defaults(), saved.opening || {}),
       ending: Object.assign(VC.ending.defaults(), saved.ending || {}),
       clips: Array.isArray(saved.clips) ? saved.clips : [],
       ranges: Array.isArray(saved.ranges) ? saved.ranges : [],
-      output: Object.assign({ size: "1920x1080", fps: 30, name: "demo" }, saved.output || {}),
+      output: Object.assign({ size: "1920x1080", fps: 30, name: "demo", sting: 0.1 }, saved.output || {}),
+      cutFx: Object.assign({ type: "whip", dur: 0.3 }, saved.cutFx || {}),
     };
     if (!Array.isArray(p.opening.images)) p.opening.images = [];
     return p;
@@ -37,7 +41,69 @@
   function save() {
     $("save-badge").textContent = "保存中…"; $("save-badge").classList.add("dirty");
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => { store.saveProject(P); $("save-badge").textContent = "保存済み"; $("save-badge").classList.remove("dirty"); }, 250);
+    saveTimer = setTimeout(flushSave, 250);
+  }
+  function flushSave() {
+    clearTimeout(saveTimer);
+    store.saveProject(P);
+    $("save-badge").textContent = "保存済み"; $("save-badge").classList.remove("dirty");
+    renderProjTabs();
+  }
+
+  // ---------- プロジェクトのタブ ----------
+  function renderProjTabs() {
+    const list = store.list();
+    $("proj-tabs").innerHTML = list.map((p) =>
+      `<div class="proj-tab ${p.id === P.id ? "active" : ""}" data-action="proj-switch" data-id="${p.id}" title="クリックで切替／ダブルクリックで名前変更"><span class="n">${esc(p.name || "動画")}</span><button class="x" data-action="proj-close" data-id="${p.id}" title="このプロジェクトを削除">✕</button></div>`
+    ).join("") + `<div class="proj-tab add" data-action="proj-new" title="新しい動画をまっさらから始める">＋ 新規</div>`;
+  }
+  async function switchProject(id) {
+    if (id === P.id) return;
+    const next = store.getProject(id);
+    if (!next) return;
+    pause();
+    flushSave();
+    if (S.pop) closePopover();
+    P = normalizeProject(next);
+    store.setCurrentId(P.id);
+    S.T = 0; S.active = null; S.scrubSrc = null; S.selectedRange = null;
+    VC.opening._cache = null; R.snaps = {};
+    applyCanvasSize();
+    renderProjTabs(); renderTimeline(); renderPanel();
+    await restoreMedia();
+    setTab(P.clips.length ? "clips" : "opening");
+    renderTimeline(); setT(0, { pause: true });
+  }
+  async function newProject() {
+    flushSave();
+    const shell = store.newShell();
+    const p = normalizeProject(shell);
+    store.saveProject(p);
+    await switchProject(p.id);
+    toast(`「${p.name}」を作成しました（ダブルクリックで名前変更）`);
+  }
+  async function closeProject(id) {
+    const p = store.getProject(id);
+    if (!p) return;
+    if (!confirm(`「${p.name}」を削除しますか？（クリップ・画像・設定が消えます）`)) return;
+    for (const c of p.clips || []) { delete runtime.videos[c.id]; store.delBlob(c.id); }
+    for (const im of (p.opening && p.opening.images) || []) { delete runtime.images[im.id]; store.delBlob(im.id); }
+    store.deleteProject(id);
+    if (id === P.id) {
+      const rest = store.list();
+      if (rest.length) { P = { id: null }; await switchProject(rest[0].id); }
+      else { P = normalizeProject(store.newShell("動画 1")); store.saveProject(P); store.setCurrentId(P.id); S.T = 0; S.active = null; renderProjTabs(); renderTimeline(); setTab("opening"); setT(0, { pause: true }); }
+    } else renderProjTabs();
+    toast("削除しました");
+  }
+  function renameProject(id) {
+    const p = id === P.id ? P : store.getProject(id);
+    if (!p) return;
+    const name = prompt("プロジェクト名", p.name || "");
+    if (name == null || !name.trim()) return;
+    p.name = name.trim().slice(0, 40);
+    if (id === P.id) save(); else store.saveProject(p);
+    renderProjTabs();
   }
 
   let toastTimer = null;
@@ -87,6 +153,7 @@
   async function restoreMedia() {
     const keepClips = [];
     for (const c of P.clips) {
+      if (runtime.videos[c.id]) { keepClips.push(c); continue; }
       try {
         const b = await store.getBlob(c.id);
         if (!b) continue;
@@ -99,6 +166,7 @@
     if (keepClips.length !== P.clips.length) { P.ranges = TL.remapRanges(P.ranges, P.clips, keepClips); P.clips = keepClips; save(); }
     const keepImgs = [];
     for (const im of P.opening.images) {
+      if (runtime.images[im.id]) { keepImgs.push(im); continue; }
       try {
         const b = await store.getBlob(im.id);
         if (!b) continue;
@@ -357,6 +425,7 @@
     if (r.end - r.start < 0.1) { toast("範囲が短すぎます"); return; }
     const idx = P.ranges.findIndex((x) => x.id === r.id);
     if (idx === -1) P.ranges.push(r); else P.ranges[idx] = r;
+    R.snaps = {};
     save();
     closePopover();
     toast(isNew ? "範囲を追加しました" : "範囲を更新しました");
@@ -416,6 +485,17 @@
           <button class="btn" data-action="clip-down" data-i="${i}" ${i === P.clips.length - 1 ? "disabled" : ""} title="下へ">↓</button>
           <button class="btn btn-danger" data-action="clip-del" data-i="${i}" title="削除">✕</button>
         </div>`).join("") : `<div class="note">クリップはこの順番で1本につながります。順番を入れ替えても、付けた字幕・倍速・カットはそのクリップについていきます。</div>`}
+      <h3 style="margin-top:4px">✂ カットの演出</h3>
+      <div class="grid2">
+        <div class="field"><label>種類</label><select data-bind="cutFx.type">
+          <option value="whip" ${P.cutFx.type === "whip" ? "selected" : ""}>ウィップ（高速スライド＋ブラー）</option>
+          <option value="zoom" ${P.cutFx.type === "zoom" ? "selected" : ""}>パンチズーム</option>
+          <option value="glitch" ${P.cutFx.type === "glitch" ? "selected" : ""}>グリッチ</option>
+          <option value="none" ${P.cutFx.type === "none" ? "selected" : ""}>なし（ただ切る）</option>
+        </select></div>
+        ${num("長さ", "cutFx.dur", P.cutFx.dur, 0.1, 0.8, 0.05, "秒")}
+      </div>
+      <div class="note">カットした箇所で、前の映像から次の映像へ切り替わるときの演出です。プレビューで一度その箇所を通過すると、前の映像も含めた完全な演出になります（書き出しでは常に完全）。</div>
       <div class="note">再生できない場合（HEVC収録など）は、QuickTime Player で「ファイル → 書き出す → 1080p」してから追加してください。Macの画面収録は標準で無音です。</div>`;
   }
   function panelEnding() {
@@ -438,11 +518,13 @@
         <div class="field"><label>フレームレート</label><select data-bind="output.fps"><option value="30" ${P.output.fps == 30 ? "selected" : ""}>30 fps</option><option value="24" ${P.output.fps == 24 ? "selected" : ""}>24 fps</option><option value="60" ${P.output.fps == 60 ? "selected" : ""}>60 fps</option></select></div>
         <div class="field"><label>ファイル名</label><input type="text" data-bind="output.name" value="${esc(P.output.name)}"></div>
       </div>
-      <div class="note">長さ ${TL.fmt(inf.total)}（OP ${inf.opDur.toFixed(1)}s ＋ 本編 ${TL.fmt(inf.outDur)} ＋ ED ${inf.edDur.toFixed(1)}s）<br>${sz.w}×${sz.h}・${P.output.fps}fps・無音・${mp4 === false ? "webm" : "mp4 (H.264)"}</div>
+      ${num("先頭のタイトルカード（サムネ用）", "output.sting", P.output.sting, 0, 0.5, 0.02, "秒")}
+      <div class="note">動画の一番最初に、アプリ名（エンディングの文字）をほんの一瞬だけ表示します。SNSのサムネイルがこれになります。0.1秒＝約3フレームで、再生中はほぼ気づきません。0 でオフ。</div>
+      <div class="note">長さ ${TL.fmt(inf.total)}（タイトル ${inf.stingDur.toFixed(2)}s ＋ OP ${inf.openDur.toFixed(1)}s ＋ 本編 ${TL.fmt(inf.outDur)} ＋ ED ${inf.edDur.toFixed(1)}s）<br>${sz.w}×${sz.h}・${P.output.fps}fps・無音・${mp4 === false ? "webm" : "mp4 (H.264)"}</div>
       ${mp4 === false ? `<div class="warn">このブラウザは mp4 書き出しに対応していないため webm になります。X / LinkedIn に投稿するなら <b>Chrome</b> で書き出してください。</div>` : mp4 === true ? `<div class="small">✅ mp4（H.264）で書き出せます。X / LinkedIn にそのまま投稿できます。</div>` : `<div class="small">対応確認中…</div>`}
       <button class="btn btn-primary" data-action="export" ${inf.total <= 0 ? "disabled" : ""} style="height:40px">⬇ 動画を書き出す</button>
       <div class="note">1フレームずつ描いてエンコードするので、動画の長さの0.5〜1.5倍ほど時間がかかります。書き出し中はこのタブを閉じないでください。</div>
-      <details><summary class="small" style="cursor:pointer">データを全部消す</summary><div class="row" style="margin-top:6px"><button class="btn btn-sm btn-danger" data-action="wipe">クリップ・画像・設定をすべて削除</button></div></details>`;
+      <details><summary class="small" style="cursor:pointer">データを全部消す</summary><div class="row" style="margin-top:6px"><button class="btn btn-sm btn-danger" data-action="wipe">全プロジェクトのクリップ・画像・設定を削除</button></div></details>`;
   }
 
   // ---------- export ----------
@@ -549,10 +631,14 @@
       case "export": doExport(); break;
       case "export-cancel": S.cancelExport = true; break;
       case "wipe": {
-        if (!confirm("クリップ・画像・設定をすべて削除します。よろしいですか？")) break;
-        await store.clearBlobs(); store.clearProject();
+        if (!confirm("全プロジェクトのクリップ・画像・設定をすべて削除します。よろしいですか？")) break;
+        await store.clearAll();
         location.reload(); break;
       }
+      // project tabs
+      case "proj-switch": await switchProject(id); break;
+      case "proj-new": await newProject(); break;
+      case "proj-close": e.stopPropagation(); await closeProject(id); break;
       // ranges
       case "range-jump": { const r = P.ranges.find((x) => x.id === id); if (r) { seekSrc(r.start); } break; }
       case "range-edit": { const r = P.ranges.find((x) => x.id === id); if (r) openPopover(r, false); break; }
@@ -571,6 +657,7 @@
 
   $("tabs").addEventListener("click", (e) => { const b = e.target.closest("button[data-tab]"); if (b) setTab(b.dataset.tab); });
   $("btn-export-tab").addEventListener("click", () => setTab("export"));
+  $("proj-tabs").addEventListener("dblclick", (e) => { const t = e.target.closest(".proj-tab[data-id]"); if (t) renameProject(t.dataset.id); });
   $("btn-play").addEventListener("click", () => (S.playing ? pause() : play()));
   $("btn-start").addEventListener("click", () => setT(0, { pause: true }));
   $("tl-open").addEventListener("click", () => setT(0, { pause: true }));
@@ -647,6 +734,7 @@
   // ---------- boot ----------
   (async () => {
     applyCanvasSize();
+    renderProjTabs();
     setTab(P.clips.length ? "clips" : "opening");
     renderTimeline();
     updateHUD();

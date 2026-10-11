@@ -36,16 +36,22 @@ VC.timeline = {
       const a = b[i], c = b[i + 1];
       if (c - a <= 1e-6) continue;
       const mid = (a + c) / 2;
-      let cut = false, rate = 1;
+      let cut = false, rate = 1, cutId = null;
       for (const r of ranges || []) {
         if (mid >= r.start && mid < r.end) {
-          if (r.type === "cut") cut = true;
+          if (r.type === "cut") { cut = true; cutId = cutId || r.id; }
           else if (r.type === "speed") rate = Math.max(0.1, Number(r.rate) || 1);
         }
       }
       const olen = cut ? 0 : (c - a) / rate;
-      segs.push({ start: a, end: c, cut, rate, outStart: out, outEnd: out + olen });
+      segs.push({ start: a, end: c, cut, rate, cutId, outStart: out, outEnd: out + olen, afterCut: null, beforeCut: null });
       out += olen;
+    }
+    // カット演出用：カットの直前／直後のセグメントに印を付ける
+    for (let i = 0; i < segs.length; i++) {
+      if (segs[i].cut) continue;
+      if (i > 0 && segs[i - 1].cut) segs[i].afterCut = segs[i - 1].cutId;
+      if (i < segs.length - 1 && segs[i + 1].cut) segs[i].beforeCut = segs[i + 1].cutId;
     }
     return segs;
   },
