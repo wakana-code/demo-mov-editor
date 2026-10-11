@@ -175,6 +175,12 @@
   }
   function syncVideoToT(force) {
     const loc = R.locate(P, S.T);
+    if (loc.phase === "opening" && loc.trans != null && loc.clip) {
+      // トランジション中：本編の最初のフレームを止めたまま表示
+      const tv = runtime.videos[loc.clip.id];
+      if (tv) { if (S.active && S.active !== tv) { try { S.active.pause(); } catch (e) {} } S.active = tv; tv.pause(); if (Math.abs(tv.currentTime - loc.clipLocal) > 0.05) tv.currentTime = loc.clipLocal; }
+      return loc;
+    }
     if (loc.phase !== "main" || !loc.clip) { if (S.active) { S.active.pause(); } return loc; }
     const v = runtime.videos[loc.clip.id];
     if (!v) return loc;
@@ -393,7 +399,9 @@
       ${num("一呼吸", "opening.pause", o.pause, 0, 1.5, 0.05, "秒")}
       <div class="field"><label>用途（最後にドーンと出す文章）</label><textarea data-bind="opening.purpose" placeholder="例：edit documents / 計画書を貼るだけでタスクに分解">${esc(o.purpose)}</textarea>
         <div class="small">${VC.opening.phrases(o.purpose).length ? `長いので ${VC.opening.phrases(o.purpose).length} フレーズに分けて出してから全文を表示します` : "短いのでそのままドーンと表示します"}</div></div>
-      <div class="grid2">${num("1フレーズの時間", "opening.phraseDur", o.phraseDur, 0.2, 1.5, 0.05, "秒")}${num("全文の表示時間", "opening.finalHold", o.finalHold, 0.5, 4, 0.1, "秒")}</div>`;
+      <div class="grid2">${num("1フレーズの時間", "opening.phraseDur", o.phraseDur, 0.2, 1.5, 0.05, "秒")}${num("全文の表示時間", "opening.finalHold", o.finalHold, 0.5, 4, 0.1, "秒")}</div>
+      ${num("本編へのズームイン（パンチズーム）", "opening.transDur", o.transDur, 0, 1.2, 0.05, "秒")}
+      <div class="note">用途の文字に一気にズームイン → 文字を突き抜けた先に本編の映像が現れます（白いフラッシュ付き）。0 にするとただの切り替えになります。</div>`;
   }
   function panelClips() {
     const total = TL.totalSource(P.clips);

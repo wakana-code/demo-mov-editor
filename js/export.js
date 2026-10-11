@@ -47,7 +47,7 @@ VC.exporter = {
 
   async prepare(P, runtime, info, T) {
     const loc = VC.render.locate(P, T, info);
-    if (loc.phase === "main" && loc.clip) {
+    if ((loc.phase === "main" || loc.trans != null) && loc.clip) {
       const v = runtime.videos[loc.clip.id];
       if (v) await this.seekTo(v, loc.clipLocal);
     }

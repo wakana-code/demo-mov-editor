@@ -61,8 +61,19 @@ VC.opening = {
       purpose: "edit documents",
       phraseDur: 0.5,
       finalHold: 1.4,
+      transDur: 0.55,        // 用途テキスト → 本編への「パンチズーム」トランジションの長さ
       images: [],            // [{ id, name }]  中身は IndexedDB、要素は VC.runtime.images[id]
     };
+  },
+  hasPurpose(s) { return !!String((s && s.purpose) || "").trim(); },
+  transDur(s) { return this.hasPurpose(s) ? Math.max(0, Number(s.transDur) || 0) : 0; },
+  // トランジション中なら 0→1 の進行度、そうでなければ null
+  transitionK(s, t) {
+    const td = this.transDur(s);
+    if (!td) return null;
+    const start = this.duration(s) - td;
+    if (t < start) return null;
+    return Math.max(0, Math.min(1, (t - start) / td));
   },
   wordsList(s) { return (s.words || []).map((w) => String(w || "").trim()).filter(Boolean); },
   wordsDur(s) { return this.wordsList(s).length * s.wordDur; },
@@ -146,8 +157,45 @@ VC.opening = {
   duration(s) {
     if (!s || !s.enabled) return 0;
     const ph = this.phrases(s.purpose);
-    const hasPurpose = !!String(s.purpose || "").trim();
-    return this.wordsDur(s) + s.montageDur + s.pause + ph.length * s.phraseDur + (hasPurpose ? s.finalHold : 0);
+    const hasPurpose = this.hasPurpose(s);
+    return this.wordsDur(s) + s.montageDur + s.pause + ph.length * s.phraseDur + (hasPurpose ? s.finalHold + this.transDur(s) : 0);
+  },
+
+  // 用途テキストにズームインして突き抜け、本編の映像が現れる（drawMain: 本編の最初のフレームを描く関数）
+  drawTransition(ctx, W, H, k, s, drawMain) {
+    const purpose = String(s.purpose || "").trim();
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, W, H);
+    // 本編：k=0.35 から、少し寄った状態（1.18倍）から等倍へ
+    if (k > 0.35 && drawMain) {
+      const q = Math.min(1, (k - 0.35) / 0.65);
+      const eo = 1 - Math.pow(1 - q, 3);
+      const sc = 1.18 - 0.18 * eo;
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, (k - 0.35) / 0.2);
+      ctx.translate(W / 2, H / 2);
+      ctx.scale(sc, sc);
+      ctx.translate(-W / 2, -H / 2);
+      drawMain(ctx, W, H);
+      ctx.restore();
+    }
+    // テキスト：加速しながら巨大化して突き抜ける（残像つき）
+    if (k < 0.62) {
+      const q = Math.min(1, k / 0.62);
+      const ei = q * q * q;
+      const scale = 1 + ei * 9;
+      const alpha = q < 0.7 ? 1 : Math.max(0, 1 - (q - 0.7) / 0.3);
+      for (let g = 2; g >= 0; g--) {
+        const sc2 = scale * (1 - g * 0.06 * ei);
+        VC.text.drawCentered(ctx, W, H, purpose, { sizeRatio: 0.12, scale: sc2, alpha: alpha * (g ? 0.22 : 1) });
+      }
+    }
+    // 白いフラッシュ：突き抜けた瞬間
+    const f = Math.abs(k - 0.5) < 0.16 ? 1 - Math.abs(k - 0.5) / 0.16 : 0;
+    if (f > 0) {
+      ctx.fillStyle = `rgba(255,255,255,${(0.8 * f * f).toFixed(3)})`;
+      ctx.fillRect(0, 0, W, H);
+    }
   },
 
   draw(ctx, W, H, t, s, images) {

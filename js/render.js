@@ -15,7 +15,18 @@ VC.render = {
   // T（全体の出力時間）から描画に必要な情報を求める
   locate(P, T, info) {
     info = info || this.info(P);
-    if (T < info.opDur) return { phase: "opening", local: T, info };
+    if (T < info.opDur) {
+      const loc = { phase: "opening", local: T, info };
+      // トランジション中は本編の最初のフレームも必要
+      const k = VC.opening.transitionK(P.opening, T);
+      if (k != null && P.clips.length) {
+        const firstOut = info.segs.find((g) => !g.cut);
+        const src = firstOut ? firstOut.start : 0;
+        const ca = VC.timeline.clipAt(P.clips, src);
+        loc.trans = k; loc.clip = ca ? ca.clip : null; loc.clipLocal = ca ? ca.local : 0;
+      }
+      return loc;
+    }
     const o = T - info.opDur;
     if (o < info.outDur && P.clips.length) {
       const seg = VC.timeline.segAtOut(info.segs, o) || info.segs.filter((g) => !g.cut).pop();
@@ -34,7 +45,16 @@ VC.render = {
   },
 
   draw(ctx, W, H, loc, P, runtime) {
-    if (loc.phase === "opening") { VC.opening.draw(ctx, W, H, loc.local, P.opening, runtime.images); return; }
+    if (loc.phase === "opening") {
+      if (loc.trans != null) {
+        const v = loc.clip ? runtime.videos[loc.clip.id] : null;
+        const drawMain = v && v.videoWidth ? (c, w, h) => this.drawVideo(c, w, h, v) : null;
+        VC.opening.drawTransition(ctx, W, H, loc.trans, P.opening, drawMain);
+        return;
+      }
+      VC.opening.draw(ctx, W, H, loc.local, P.opening, runtime.images);
+      return;
+    }
     if (loc.phase === "ending") { VC.ending.draw(ctx, W, H, loc.local, P.ending); return; }
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, W, H);
