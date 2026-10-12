@@ -12,6 +12,8 @@
   ];
   const CAP_COLORS = ["#facc15", "#4ade80", "#38bdf8", "#f472b6", "#fb923c", "#a78bfa"];
   const SPEEDS = [1.5, 2, 3, 4, 8, 16];
+  const FX_LABEL = { default: "既定", whip: "ウィップ", zoom: "パンチズーム", glitch: "グリッチ", none: "シームレス" };
+  function cutFxLabel(r) { const f = r.fx && r.fx !== "default" ? r.fx : P.cutFx.type; return FX_LABEL[f] || f; }
 
   // ---------- state ----------
   let P = normalizeProject(store.getCurrentProject());
@@ -334,12 +336,12 @@
     $("tl-clips").innerHTML = P.clips.map((c) => `<div class="tl-clip" style="width:${(c.duration / total) * 100}%" title="${esc(c.name)}（${TL.fmt(c.duration)}）">${esc(c.name)}</div>`).join("");
     $("tl-ranges").innerHTML = P.ranges.map((r) => {
       const l = (r.start / total) * 100, w = Math.max(0.3, ((r.end - r.start) / total) * 100);
-      const label = r.type === "caption" ? `💬 ${r.text || ""}` : r.type === "speed" ? `×${r.rate}` : "✂";
+      const label = r.type === "caption" ? `💬 ${r.text || ""}` : r.type === "speed" ? `×${r.rate}` : `✂ ${cutFxLabel(r)}`;
       return `<div class="tl-range ${r.type} ${S.selectedRange === r.id ? "selected" : ""}" data-id="${r.id}" style="left:${l}%;width:${w}%" title="${esc(label)}">${esc(label)}</div>`;
     }).join("");
     $("range-list").innerHTML = P.ranges.length ? P.ranges.slice().sort((a, b) => a.start - b.start).map((r) => {
       const chip = r.type === "caption" ? `<span class="chip chip-cap">字幕</span>` : r.type === "speed" ? `<span class="chip chip-speed">×${r.rate}</span>` : `<span class="chip chip-cut">カット</span>`;
-      const d = r.type === "caption" ? r.text : r.type === "speed" ? `${r.rate}倍速` : "この区間を飛ばす";
+      const d = r.type === "caption" ? r.text : r.type === "speed" ? `${r.rate}倍速` : `この区間を飛ばす（演出: ${cutFxLabel(r)}）`;
       return `<div class="range-item"><span class="t">${TL.fmtMs(r.start)} – ${TL.fmtMs(r.end)}</span>${chip}<span class="d">${esc(d)}</span><button class="btn btn-sm" data-action="range-jump" data-id="${r.id}">▶</button><button class="btn btn-sm" data-action="range-edit" data-id="${r.id}">編集</button><button class="btn btn-sm btn-danger" data-action="range-del" data-id="${r.id}">✕</button></div>`;
     }).join("") : "";
     updateHUD(inf);
@@ -402,7 +404,17 @@
       body = `<div class="row"><span class="small">倍率</span>${SPEEDS.map((s) => `<button class="btn btn-sm ${Number(r.rate) === s ? "btn-primary" : ""}" data-action="pop-rate" data-rate="${s}">×${s}</button>`).join("")}</div>
         <div class="small">この区間は ${((r.end - r.start) / (Number(r.rate) || 2)).toFixed(1)} 秒に縮みます</div>`;
     } else {
-      body = `<div class="small">この区間（${(r.end - r.start).toFixed(1)}秒）を動画から取り除きます。</div>`;
+      const cur = r.fx || "default";
+      body = `<div class="small">この区間（${(r.end - r.start).toFixed(1)}秒）を動画から取り除きます。</div>
+        <div class="row" style="margin-top:8px"><span class="small">切り替わりの演出</span>
+          <select id="pop-fx" style="width:auto">
+            <option value="default" ${cur === "default" ? "selected" : ""}>既定（クリップタブの設定：${FX_LABEL[P.cutFx.type] || P.cutFx.type}）</option>
+            <option value="whip" ${cur === "whip" ? "selected" : ""}>ウィップ（高速スライド＋ブラー）</option>
+            <option value="zoom" ${cur === "zoom" ? "selected" : ""}>パンチズーム</option>
+            <option value="glitch" ${cur === "glitch" ? "selected" : ""}>グリッチ</option>
+            <option value="none" ${cur === "none" ? "selected" : ""}>なし（シームレスに繋ぐ）</option>
+          </select></div>
+        <div class="small">演出の長さはクリップタブの「カットの演出 → 長さ」が共通で使われます。</div>`;
     }
     pop.innerHTML = head + body + `
       <div class="row" style="margin-top:10px">
@@ -422,6 +434,7 @@
       if (!r.text) { toast("字幕の文章を入力してください"); return; }
     }
     if (r.type === "speed") r.rate = Number(r.rate) || 2;
+    if (r.type === "cut") { const sel = $("pop-fx"); r.fx = sel ? sel.value : (r.fx || "default"); }
     if (r.end - r.start < 0.1) { toast("範囲が短すぎます"); return; }
     const idx = P.ranges.findIndex((x) => x.id === r.id);
     if (idx === -1) P.ranges.push(r); else P.ranges[idx] = r;
@@ -465,6 +478,8 @@
       </div>
       ${num("モンタージュの長さ", "opening.montageDur", o.montageDur, 1.5, 10, 0.1, "秒")}
       <div class="grid2">${num("最初の間隔", "opening.intervalStart", o.intervalStart, 0.1, 1, 0.01, "秒")}${num("最後の間隔", "opening.intervalEnd", o.intervalEnd, 0.03, 0.3, 0.005, "秒")}</div>
+      ${num("加速の強さ", "opening.accel", o.accel, 1, 4, 0.1, "")}
+      <div class="note">1＝一定のペースで速くなる　2＝標準　3〜4＝最初ゆっくりが長く続いて、最後に一気に加速（CMっぽい）。コマ数 ${need} はこの値で変わります。</div>
       ${num("一呼吸", "opening.pause", o.pause, 0, 1.5, 0.05, "秒")}
       <div class="field"><label>用途（最後にドーンと出す文章）</label><textarea data-bind="opening.purpose" placeholder="例：edit documents / 計画書を貼るだけでタスクに分解">${esc(o.purpose)}</textarea>
         <div class="small">${VC.opening.phrases(o.purpose).length ? `長いので ${VC.opening.phrases(o.purpose).length} フレーズに分けて出してから全文を表示します` : "短いのでそのままドーンと表示します"}</div></div>
@@ -491,11 +506,11 @@
           <option value="whip" ${P.cutFx.type === "whip" ? "selected" : ""}>ウィップ（高速スライド＋ブラー）</option>
           <option value="zoom" ${P.cutFx.type === "zoom" ? "selected" : ""}>パンチズーム</option>
           <option value="glitch" ${P.cutFx.type === "glitch" ? "selected" : ""}>グリッチ</option>
-          <option value="none" ${P.cutFx.type === "none" ? "selected" : ""}>なし（ただ切る）</option>
+          <option value="none" ${P.cutFx.type === "none" ? "selected" : ""}>なし（シームレスに繋ぐ）</option>
         </select></div>
         ${num("長さ", "cutFx.dur", P.cutFx.dur, 0.1, 0.8, 0.05, "秒")}
       </div>
-      <div class="note">カットした箇所で、前の映像から次の映像へ切り替わるときの演出です。プレビューで一度その箇所を通過すると、前の映像も含めた完全な演出になります（書き出しでは常に完全）。</div>
+      <div class="note">ここは「既定」の演出です。カットごとに変えたいときは、再生バーのカット範囲をクリック → 「切り替わりの演出」で個別に選べます。プレビューで一度その箇所を通過すると、前の映像も含めた完全な演出になります（書き出しでは常に完全）。</div>
       <div class="note">再生できない場合（HEVC収録など）は、QuickTime Player で「ファイル → 書き出す → 1080p」してから追加してください。Macの画面収録は標準で無音です。</div>`;
   }
   function panelEnding() {

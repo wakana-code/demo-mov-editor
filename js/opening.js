@@ -57,6 +57,7 @@ VC.opening = {
       montageDur: 4.2,
       intervalStart: 0.42,
       intervalEnd: 0.045,
+      accel: 2,              // 加速の強さ（1=直線的、大きいほど最初ゆっくり→最後に一気に）
       pause: 0.5,
       purpose: "edit documents",
       phraseDur: 0.5,
@@ -83,10 +84,11 @@ VC.opening = {
     const out = [];
     const d = Math.max(0.5, s.montageDur);
     let t = 0, guard = 0;
+    const accel = Math.max(0.5, Number(s.accel) || 2);
     while (t < d && guard < 3000) {
       out.push(t);
       const f = t / d;
-      const ease = f * f;
+      const ease = Math.pow(f, accel);
       const iv = s.intervalStart + (s.intervalEnd - s.intervalStart) * ease;
       t += Math.max(0.03, iv);
       guard++;
@@ -123,7 +125,7 @@ VC.opening = {
     });
   },
   framesCached(s) {
-    const key = JSON.stringify([s.montageDur, s.intervalStart, s.intervalEnd, (s.images || []).map((i) => i.id)]);
+    const key = JSON.stringify([s.montageDur, s.intervalStart, s.intervalEnd, s.accel, (s.images || []).map((i) => i.id)]);
     if (!this._cache || this._cache.key !== key) this._cache = { key, frames: this.frames(s) };
     return this._cache.frames;
   },

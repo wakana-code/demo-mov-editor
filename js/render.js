@@ -66,8 +66,12 @@ VC.render = {
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, W, H);
     const v = loc.clip ? runtime.videos[loc.clip.id] : null;
-    const fx = P.cutFx || { type: "whip", dur: 0.3 };
+    let fx = P.cutFx || { type: "whip", dur: 0.3 };
     const seg = loc.seg;
+    if (seg && seg.afterCut) {
+      const cr = (P.ranges || []).find((r) => r.id === seg.afterCut);
+      if (cr && cr.fx && cr.fx !== "default") fx = { type: cr.fx, dur: fx.dur };
+    }
     const inFx = !loc.scrub && seg && seg.afterCut && fx.type !== "none" && fx.dur > 0 && (loc.local - seg.outStart) < fx.dur;
     if (inFx && v && v.videoWidth) {
       const inc = this.incCanvas(W, H);
