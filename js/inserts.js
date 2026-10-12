@@ -1,10 +1,10 @@
 window.VC = window.VC || {};
 
-// 埋め込み：スライド（文字／動画）と動画モンタージュ
+// 埋め込み：スライド（文字／画像／動画）と動画モンタージュ
 VC.inserts = {
   SIZE_MULT: { 1: 0.55, 2: 0.75, 3: 1, 4: 1.3, 5: 1.7, 6: 2.2, 7: 2.8 },
 
-  newSlide() { return { id: VC.store.uid("s"), html: "", dur: 2.5, bg: null, fg: null, pos: "center", video: null, ranges: [] }; },
+  newSlide() { return { id: VC.store.uid("s"), html: "", dur: 2.5, bg: null, fg: null, pos: "center", align: "center", images: [], video: null, ranges: [] }; },
   newSlides() { return { id: VC.store.uid("ins"), type: "slides", at: null, slides: [this.newSlide()] }; },
   newMontage() { return { id: VC.store.uid("ins"), type: "montage", at: null, videos: [], montageDur: 4, intervalStart: 0.5, intervalEnd: 0.08, accel: 2, lastHold: 0.4 }; },
   normalize(ins) {
@@ -19,8 +19,10 @@ VC.inserts = {
       for (const s of ins.slides) {
         if (!s.id) s.id = VC.store.uid("s");
         if (!Array.isArray(s.ranges)) s.ranges = [];
+        if (!Array.isArray(s.images)) s.images = [];
         if (s.dur == null) s.dur = 2.5;
         if (!s.pos) s.pos = "center";
+        if (!s.align) s.align = "center";
         if (s.html == null) s.html = "";
       }
     }
@@ -30,9 +32,10 @@ VC.inserts = {
   label(ins) {
     return ins.type === "montage"
       ? `🎞 モンタージュ（${ins.videos.length}本）`
-      : `💬 スライド（${ins.slides.length}枚${ins.slides.some((s) => s.video) ? "・動画あり" : ""}）`;
+      : `💬 スライド（${ins.slides.length}枚${ins.slides.some((s) => s.video) ? "・動画" : ""}${ins.slides.some((s) => s.images.length) ? "・画像" : ""}）`;
   },
   videoRefs(ins) { return ins.type === "montage" ? ins.videos.slice() : ins.slides.filter((s) => s.video).map((s) => s.video); },
+  imageRefs(ins) { return ins.type === "montage" ? [] : ins.slides.reduce((a, s) => a.concat(s.images || []), []); },
   colorsOf(slide, P) {
     const base = (P && P.colors) || VC.styles.defaultColors(P && P.style);
     return { bg: (slide && slide.bg) || base.bg, fg: (slide && slide.fg) || base.fg, font: base.font };
@@ -65,6 +68,21 @@ VC.inserts = {
     if (!seg) return null;
     const src = Math.max(0, Math.min(seg.end - 1e-4, seg.start + (t - seg.outStart) * seg.rate));
     return { id: slide.video.id, time: src, rate: seg.rate, src, seg };
+  },
+
+  // 画像：x,y,w,h はステージに対する比率（0..1）、sx,sy,sw,sh は元画像に対する切り取り比率（0..1）
+  newImage(id, name, natW, natH, W, H) {
+    const w = 0.42;
+    const h = (w * W * natH / natW) / H;
+    return { id, name: name || "image", x: (1 - w) / 2, y: (1 - h) / 2, w, h, sx: 0, sy: 0, sw: 1, sh: 1 };
+  },
+  drawImages(ctx, W, H, slide, runtime) {
+    for (const im of slide.images || []) {
+      const img = runtime.images[im.id];
+      if (!img || !img.naturalWidth) continue;
+      const nw = img.naturalWidth, nh = img.naturalHeight;
+      try { ctx.drawImage(img, im.sx * nw, im.sy * nh, Math.max(1, im.sw * nw), Math.max(1, im.sh * nh), im.x * W, im.y * H, im.w * W, im.h * H); } catch (e) {}
+    }
   },
 
   // ---------- 文字（contenteditable の HTML → 行と装飾） ----------
@@ -103,8 +121,11 @@ VC.inserts = {
     return lines.map((l) => (l.length ? l : [{ text: " ", u: false, b: false, size: 3 }]));
   },
   plainLength(lines) { return lines.reduce((a, l) => a + l.reduce((b, r) => b + [...r.text].length, 0), 0); },
+  hasText(slide) { const lines = this.parseHtml(slide.html); return this.plainLength(lines) > 0 && lines.some((l) => l.some((r) => r.text.trim())); },
 
-  drawSlide(ctx, W, H, slide, t, P, runtime) {
+  // opts: { static, noText, noImages, noBg }
+  drawSlide(ctx, W, H, slide, t, P, runtime, opts) {
+    opts = opts || {};
     const colors = this.colorsOf(slide, P);
     VC.text.use(colors);
     ctx.fillStyle = colors.bg;
@@ -118,12 +139,19 @@ VC.inserts = {
       else { ctx.fillStyle = "#222"; ctx.fillRect(0, 0, W, H); }
       if (st) for (const c of VC.timeline.captionsAt(slide.ranges, st.src)) VC.render.drawCaption(ctx, W, H, c, st.src);
     }
-    const lines = this.parseHtml(slide.html);
-    if (this.plainLength(lines) && lines.some((l) => l.some((r) => r.text.trim()))) this.drawText(ctx, W, H, lines, t, dur, P, colors, slide.pos || "center", hasVideo);
+    if (!opts.noImages) this.drawImages(ctx, W, H, slide, runtime);
+    if (!opts.noText) {
+      const lines = this.parseHtml(slide.html);
+      if (this.plainLength(lines) && lines.some((l) => l.some((r) => r.text.trim()))) {
+        this.drawText(ctx, W, H, lines, t, dur, P, colors, { pos: slide.pos || "center", align: slide.align || "center", overMedia: hasVideo || (slide.images || []).length > 0, static: !!opts.static });
+      }
+    }
   },
 
   // 文字のアニメーション：型に合わせる（typewriter＝タイプ→じわっと左→一瞬で退場 / classic＝行ごとにポップイン→フェード）
-  drawText(ctx, W, H, lines, t, dur, P, colors, pos, overVideo) {
+  drawText(ctx, W, H, lines, t, dur, P, colors, o) {
+    o = o || {};
+    const pos = o.pos || "center", align = o.align || "center";
     const tw = VC.opening.isType(P, "typewriter");
     const base = H * 0.07;
     const laid = lines.map((l) => {
@@ -141,10 +169,13 @@ VC.inserts = {
     const sc = Math.min(1, maxW / widest);
     const totalH = laid.reduce((a, l) => a + l.h, 0) * sc;
     const cy = pos === "top" ? H * 0.12 + totalH / 2 : pos === "bottom" ? H * 0.88 - totalH / 2 : H / 2;
+    const lineX = (lw) => (align === "left" ? W * 0.07 : align === "right" ? W * 0.93 - lw : W / 2 - lw / 2);
     let alpha = 1, dx = 0, shownChars = Infinity, lineAnim = null, blur = 0;
     const exit = 0.22;
     const N = this.plainLength(lines);
-    if (tw) {
+    if (o.static) {
+      // 編集画面用：全文を静止表示
+    } else if (tw) {
       const charDur = Math.min(0.05, (dur * 0.5) / Math.max(1, N));
       const stay = Math.max(0.1, dur - exit);
       const drift = W * 0.018;
@@ -157,7 +188,7 @@ VC.inserts = {
         const e = q * q * q;
         dx = -drift - e * W * 1.3;
         blur = Math.sin(Math.PI * q);
-        alpha = overVideo ? 1 - q : 1 - Math.max(0, q - 0.8) / 0.2;
+        alpha = o.overMedia ? 1 - q : 1 - Math.max(0, q - 0.8) / 0.2;
       }
     } else {
       lineAnim = laid.map((_, i) => {
@@ -166,12 +197,13 @@ VC.inserts = {
       });
       if (t > dur - exit) alpha = Math.max(0, (dur - t) / exit);
     }
-    if (overVideo) {
+    if (o.overMedia) {
       ctx.save();
       ctx.globalAlpha = 0.55 * alpha;
       ctx.fillStyle = colors.bg;
       const bw = widest * sc + base;
-      VC.render.rrect(ctx, W / 2 - bw / 2 + dx, cy - totalH / 2 - base * 0.3, bw, totalH + base * 0.6, base * 0.3);
+      const bl = lineX(widest * sc) - base / 2;
+      VC.render.rrect(ctx, bl + dx, cy - totalH / 2 - base * 0.3, bw, totalH + base * 0.6, base * 0.3);
       ctx.fill();
       ctx.restore();
     }
@@ -181,10 +213,11 @@ VC.inserts = {
     let y = cy - totalH / 2, count = 0, cursor = null;
     laid.forEach((l, li) => {
       const lh = l.h * sc, ly = y + lh / 2;
-      let x = W / 2 - (l.w * sc) / 2 + dx;
+      const lw = l.w * sc;
+      let x = lineX(lw) + dx;
       const la = lineAnim ? lineAnim[li] : null;
       ctx.save();
-      if (la) { ctx.translate(W / 2, ly); ctx.scale(la.sc, la.sc); ctx.translate(-W / 2, -ly); }
+      if (la) { const cx = x + lw / 2; ctx.translate(cx, ly); ctx.scale(la.sc, la.sc); ctx.translate(-cx, -ly); }
       for (const r of l.runs) {
         const size = r.size * sc;
         ctx.font = `${r.b ? 800 : 600} ${size}px ${VC.text.FONT}`;
