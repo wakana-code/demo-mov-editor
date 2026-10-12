@@ -50,7 +50,7 @@ VC.render = {
   },
 
   draw(ctx, W, H, loc, P, runtime) {
-    if (loc.phase === "sting") { VC.sting.draw(ctx, W, H, P, runtime.images); return; }
+    if (loc.phase === "sting") { VC.sting.draw(ctx, W, H, P); return; }
     if (loc.phase === "opening") {
       if (loc.trans != null) {
         const v = loc.clip ? runtime.videos[loc.clip.id] : null;

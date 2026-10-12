@@ -287,31 +287,47 @@ VC.opening = {
 };
 
 // 先頭タイトルカード：ほんの一瞬（数フレーム）アプリ名を出してサムネにする
+// 黒背景＋白の大きな文字＋隅に太さ・長さの違う白い斜線（枠では囲まない）
 VC.sting = {
   duration(P) { const d = Number(P.output && P.output.sting); return d > 0 ? d : 0; },
-  draw(ctx, W, H, P, images) {
+
+  // 隅の対角線上、コーナーから距離 d の位置に、対角線と直交する向きの斜線を引く
+  slash(ctx, cx, cy, sx, sy, d, halfLen, width) {
+    const k = Math.SQRT1_2;
+    const mx = cx + sx * d * k, my = cy + sy * d * k;      // 線の中心（対角線上）
+    const dx = sx * halfLen * k, dy = -sy * halfLen * k;   // 対角線に直交する方向
+    ctx.lineWidth = width;
+    ctx.beginPath();
+    ctx.moveTo(mx - dx, my - dy);
+    ctx.lineTo(mx + dx, my + dy);
+    ctx.stroke();
+  },
+
+  draw(ctx, W, H, P) {
     const name = String((P.ending && P.ending.text) || P.name || "ReelCut").trim() || "ReelCut";
-    ctx.fillStyle = "#0b0d12";
+    ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, W, H);
-    // モンタージュ画像があれば、ぼかして暗くした背景に（動画の雰囲気に合わせる）
-    const first = P.opening && P.opening.images && P.opening.images[0];
-    const img = first && images ? images[first.id] : null;
-    if (img && img.naturalWidth) {
-      ctx.save();
-      ctx.filter = `blur(${Math.round(H * 0.025)}px) brightness(0.45) saturate(1.2)`;
-      const sc = Math.max(W / img.naturalWidth, H / img.naturalHeight) * 1.15;
-      const dw = img.naturalWidth * sc, dh = img.naturalHeight * sc;
-      ctx.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
-      ctx.restore();
-    } else {
-      const g = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, Math.max(W, H) * 0.7);
-      g.addColorStop(0, "#1e2235"); g.addColorStop(1, "#07080c");
-      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
-    }
-    const r = VC.text.drawCentered(ctx, W, H, name, { sizeRatio: H > W ? 0.085 : 0.11, weight: 800, dy: -H * 0.01 });
-    const lineW = Math.min(W * 0.18, r.size * 2.2);
-    ctx.fillStyle = "#a5b4fc";
-    ctx.fillRect(W / 2 - lineW / 2, H / 2 + r.size * r.lines * 0.72, lineW, Math.max(2, Math.round(H * 0.004)));
+
+    const m = Math.min(W, H);
+    const c = m * 0.34;               // 斜線を置く「隅」の大きさ（これより内側＝中央には描かない）
+    ctx.save();
+    ctx.strokeStyle = "#fff";
+    ctx.lineCap = "round";
+
+    // 左上：太→細の3本（長さもバラバラ）
+    this.slash(ctx, 0, 0, 1, 1, c * 0.22, c * 0.30, Math.max(3, m * 0.016));
+    this.slash(ctx, 0, 0, 1, 1, c * 0.46, c * 0.50, Math.max(2, m * 0.007));
+    this.slash(ctx, 0, 0, 1, 1, c * 0.66, c * 0.18, Math.max(1.5, m * 0.004));
+    // 右下：左上と同じ構成を点対称に
+    this.slash(ctx, W, H, -1, -1, c * 0.22, c * 0.30, Math.max(3, m * 0.016));
+    this.slash(ctx, W, H, -1, -1, c * 0.46, c * 0.50, Math.max(2, m * 0.007));
+    this.slash(ctx, W, H, -1, -1, c * 0.66, c * 0.18, Math.max(1.5, m * 0.004));
+    // 右上・左下：細く短い1本ずつ（バランス用）
+    this.slash(ctx, W, 0, -1, 1, c * 0.30, c * 0.26, Math.max(1.5, m * 0.005));
+    this.slash(ctx, 0, H, 1, -1, c * 0.30, c * 0.26, Math.max(1.5, m * 0.005));
+    ctx.restore();
+
+    VC.text.drawCentered(ctx, W, H, name, { sizeRatio: H > W ? 0.09 : 0.13, weight: 800, maxWRatio: 0.72, color: "#fff" });
   },
 };
 
