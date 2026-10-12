@@ -7,10 +7,10 @@ VC.render = {
 
   info(P) {
     const stingDur = VC.sting.duration(P);
-    const openDur = VC.opening.duration(P.opening);
+    const openDur = VC.opening.duration(P);
     const segs = VC.timeline.segments(P.clips, P.ranges);
     const outDur = VC.timeline.outputDuration(segs);
-    const edDur = VC.ending.duration(P.ending);
+    const edDur = VC.ending.duration(P);
     const opDur = stingDur + openDur;
     return { stingDur, openDur, opDur, segs, outDur, edDur, total: opDur + outDur + edDur, srcTotal: VC.timeline.totalSource(P.clips) };
   },
@@ -28,7 +28,7 @@ VC.render = {
     if (T < info.opDur) {
       const local = T - info.stingDur;
       const loc = { phase: "opening", local, info };
-      const k = VC.opening.transitionK(P.opening, local);
+      const k = VC.opening.transitionK(P, local);
       if (k != null && P.clips.length) { const f = this.firstMainClip(P, info); loc.trans = k; loc.clip = f.clip; loc.clipLocal = f.clipLocal; }
       return loc;
     }
@@ -55,14 +55,15 @@ VC.render = {
       if (loc.trans != null) {
         const v = loc.clip ? runtime.videos[loc.clip.id] : null;
         const drawMain = v && v.videoWidth ? (c, w, h) => this.drawVideo(c, w, h, v) : null;
-        VC.opening.drawTransition(ctx, W, H, loc.trans, P.opening, drawMain);
+        VC.opening.drawTransition(ctx, W, H, loc.trans, P, drawMain);
         return;
       }
-      VC.opening.draw(ctx, W, H, loc.local, P.opening, runtime.images);
+      VC.opening.draw(ctx, W, H, loc.local, P, runtime.images);
       return;
     }
-    if (loc.phase === "ending") { VC.ending.draw(ctx, W, H, loc.local, P.ending); return; }
+    if (loc.phase === "ending") { VC.ending.draw(ctx, W, H, loc.local, P); return; }
 
+    VC.text.use(null);
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, W, H);
     const v = loc.clip ? runtime.videos[loc.clip.id] : null;

@@ -35,8 +35,11 @@
       ranges: Array.isArray(saved.ranges) ? saved.ranges : [],
       output: Object.assign({ size: "1920x1080", fps: 30, name: "demo", sting: 0.1 }, saved.output || {}),
       cutFx: Object.assign({ type: "whip", dur: 0.3 }, saved.cutFx || {}),
+      style: VC.styles.get(saved.style).id,
     };
+    p.colors = Object.assign(VC.styles.defaultColors(p.style), saved.colors || {});
     if (!Array.isArray(p.opening.images)) p.opening.images = [];
+    if (!Array.isArray(p.opening.sentences)) p.opening.sentences = VC.opening.defaults().sentences;
     return p;
   }
   let saveTimer = null;
@@ -83,6 +86,7 @@
     store.saveProject(p);
     await switchProject(p.id);
     toast(`「${p.name}」を作成しました（ダブルクリックで名前変更）`);
+    openPicker();
   }
   async function closeProject(id) {
     const p = store.getProject(id);
@@ -453,9 +457,9 @@
   }
   function renderPanel() {
     const el = $("panel");
-    if (S.tab === "opening") el.innerHTML = panelOpening();
+    if (S.tab === "opening") el.innerHTML = panelOpening2();
     else if (S.tab === "clips") el.innerHTML = panelClips();
-    else if (S.tab === "ending") el.innerHTML = panelEnding();
+    else if (S.tab === "ending") el.innerHTML = panelEnding2();
     else el.innerHTML = panelExport();
   }
   function num(label, path, v, min, max, step, unit) {
@@ -522,6 +526,130 @@
       <div class="field"><label>サブテキスト（任意）</label><input type="text" data-bind="ending.sub" value="${esc(e.sub)}" placeholder="例：計画書を貼るだけ。段取りは、AIの上司がやる。"></div>
       <div class="grid2">${num("1文字の速さ", "ending.charDur", e.charDur, 0.03, 0.25, 0.01, "秒")}${num("表示したままの時間", "ending.hold", e.hold, 0.5, 5, 0.1, "秒")}</div>`;
   }
+  // ---------- 型・色（共通ブロック） ----------
+  function colorsBlock() {
+    const c = P.colors;
+    const st = VC.styles.get(P.style);
+    return `
+      <div class="field"><label>動画の型 <span class="small">${esc(st.name)}</span></label>
+        <div class="row"><button class="btn btn-sm" data-action="open-picker">🎛 型を変える（OP / ED をプレビューして選ぶ）</button></div></div>
+      <div class="field"><label>色・フォント</label>
+        <div class="row">
+          <label class="small row" style="gap:4px">背景 <input type="color" data-bind="colors.bg" value="${esc(c.bg)}"></label>
+          <label class="small row" style="gap:4px">文字 <input type="color" data-bind="colors.fg" value="${esc(c.fg)}"></label>
+          <select data-bind="colors.font" style="width:auto"><option value="sans" ${c.font === "sans" ? "selected" : ""}>サンセリフ</option><option value="serif" ${c.font === "serif" ? "selected" : ""}>セリフ（明朝）</option><option value="mono" ${c.font === "mono" ? "selected" : ""}>等幅</option></select>
+          <span class="spacer"></span><button class="btn btn-sm" data-action="colors-reset">既定に戻す</button>
+        </div></div>`;
+  }
+  function montageBlock(o) {
+    const need = VC.opening.neededCount(o);
+    const have = o.images.length;
+    return `
+      <div class="field"><label>モンタージュ画像（${have}枚 / コマ数 ${need}）</label>
+        <div class="row"><button class="btn btn-sm" data-action="add-images">＋ 画像を追加</button><span class="small">または Cmd+V で貼り付け</span><span class="spacer"></span>${have ? `<button class="btn btn-sm btn-danger" data-action="clear-images">全削除</button>` : ""}</div>
+        ${have ? `<div class="thumbs" style="margin-top:6px">${o.images.map((im) => `<div class="thumb"><img src="${runtime.images[im.id] ? runtime.images[im.id].src : ""}" alt=""><button class="x" data-action="del-image" data-id="${im.id}">✕</button></div>`).join("")}</div>` : `<div class="drop" data-action="add-images">ここをクリック / ドロップ / Cmd+V で画像を追加<br><span class="small">無いときはカラーのプレースホルダーが出ます</span></div>`}
+        <div class="note">${have && have < need ? `枚数がコマ数より少ないので、2周目以降はズーム・回転・反転・色味違いで水増しします。` : `最初ゆっくり → だんだん速く切り替わります。`}</div>
+      </div>
+      ${num("モンタージュの長さ", "opening.montageDur", o.montageDur, 1.5, 10, 0.1, "秒")}
+      <div class="grid2">${num("最初の間隔", "opening.intervalStart", o.intervalStart, 0.1, 1, 0.01, "秒")}${num("最後の間隔", "opening.intervalEnd", o.intervalEnd, 0.03, 0.3, 0.005, "秒")}</div>
+      ${num("加速の強さ", "opening.accel", o.accel, 1, 4, 0.1, "")}
+      <div class="note">1＝一定のペースで速くなる　2＝標準　3〜4＝最初ゆっくりが長く続いて、最後に一気に加速（CMっぽい）。コマ数 ${need} はこの値で変わります。</div>`;
+  }
+  function panelOpening2() {
+    const o = P.opening;
+    const dur = VC.opening.duration(P);
+    const tw = P.style === "typewriter";
+    const head = `
+      <h3>🎞 オープニング <label class="row" style="gap:6px;font-weight:400;font-size:12px"><input type="checkbox" data-bind="opening.enabled" ${o.enabled ? "checked" : ""}> 入れる</label></h3>
+      <div class="small">合計 ${dur.toFixed(1)} 秒　<button class="btn btn-sm" data-action="preview-opening">▶ プレビュー</button></div>
+      ${colorsBlock()}`;
+    if (tw) {
+      return head + `
+        <div class="field"><label>タイプで出す文章（1行＝1センテンス）</label><textarea data-bind="opening.sentences" style="min-height:84px">${esc(o.sentences.join("\n"))}</textarea>
+          <div class="small">タイプ → じわっと流れる → 一瞬で退場 → 次の文章、の順に出ます</div></div>
+        <div class="grid3">${num("1文字の速さ", "opening.charDur", o.charDur, 0.02, 0.15, 0.005, "秒")}${num("じわっと流れる時間", "opening.holdDur", o.holdDur, 0.3, 2.5, 0.05, "秒")}${num("退場の速さ", "opening.exitDur", o.exitDur, 0.1, 0.6, 0.02, "秒")}</div>
+        ${montageBlock(o)}
+        ${num("最後の1枚で止める時間", "opening.lastHold", o.lastHold, 0, 2, 0.05, "秒")}
+        <div class="note">モンタージュの最後の1枚で一瞬止まってから、本編に切り替わります。</div>`;
+    }
+    return head + `
+      <div class="field"><label>最初に1文字ずつ出す単語（スペース区切り）</label><input type="text" data-bind="opening.words" value="${esc(o.words.join(" "))}" placeholder="you can now"></div>
+      ${num("1単語の表示時間", "opening.wordDur", o.wordDur, 0.4, 2, 0.05, "秒")}
+      ${montageBlock(o)}
+      ${num("一呼吸", "opening.pause", o.pause, 0, 1.5, 0.05, "秒")}
+      <div class="field"><label>用途（最後にドーンと出す文章）</label><textarea data-bind="opening.purpose" placeholder="例：edit documents / 計画書を貼るだけでタスクに分解">${esc(o.purpose)}</textarea>
+        <div class="small">${VC.opening.phrases(o.purpose).length ? `長いので ${VC.opening.phrases(o.purpose).length} フレーズに分けて出してから全文を表示します` : "短いのでそのままドーンと表示します"}</div></div>
+      <div class="grid2">${num("1フレーズの時間", "opening.phraseDur", o.phraseDur, 0.2, 1.5, 0.05, "秒")}${num("全文の表示時間", "opening.finalHold", o.finalHold, 0.5, 4, 0.1, "秒")}</div>
+      ${num("本編へのズームイン（パンチズーム）", "opening.transDur", o.transDur, 0, 1.2, 0.05, "秒")}
+      <div class="note">用途の文字に一気にズームイン → 文字を突き抜けた先に本編の映像が現れます。0 にするとただの切り替えになります。</div>`;
+  }
+  function panelEnding2() {
+    const e = P.ending;
+    const tw = P.style === "typewriter";
+    return `
+      <h3>🔚 エンディング <label class="row" style="gap:6px;font-weight:400;font-size:12px"><input type="checkbox" data-bind="ending.enabled" ${e.enabled ? "checked" : ""}> 入れる</label></h3>
+      <div class="small">合計 ${VC.ending.duration(P).toFixed(1)} 秒　<button class="btn btn-sm" data-action="preview-ending">▶ プレビュー</button></div>
+      ${colorsBlock()}
+      ${tw ? `
+      <div class="field"><label>PR文（タイプ → じわっと流れる → 一瞬で退場）</label><textarea data-bind="ending.prText" style="min-height:60px">${esc(e.prText || "")}</textarea></div>
+      <div class="grid3">${num("1文字の速さ", "ending.prCharDur", e.prCharDur, 0.02, 0.15, 0.005, "秒")}${num("じわっと流れる時間", "ending.prHold", e.prHold, 0.3, 2.5, 0.05, "秒")}${num("退場の速さ", "ending.exitDur", e.exitDur, 0.1, 0.6, 0.02, "秒")}</div>` : ""}
+      <div class="field"><label>アプリ名（タイピング風に出ます）</label><input type="text" data-bind="ending.text" value="${esc(e.text)}" placeholder="AI-PM"></div>
+      ${tw ? "" : `<div class="field"><label>サブテキスト（任意）</label><input type="text" data-bind="ending.sub" value="${esc(e.sub)}" placeholder="例：計画書を貼るだけ。段取りは、AIの上司がやる。"></div>`}
+      <div class="grid2">${num("アプリ名の1文字の速さ", "ending.charDur", e.charDur, 0.03, 0.25, 0.01, "秒")}${num("表示したままの時間", "ending.hold", e.hold, 0.5, 5, 0.1, "秒")}</div>`;
+  }
+
+  // ---------- 型の選択画面（OP/EDを自動再生） ----------
+  const demos = {};
+  function demoOf(id) { return demos[id] || (demos[id] = VC.styles.demo(id)); }
+  let pickerT0 = 0;
+  function openPicker() {
+    S.picker = true;
+    const el = $("style-picker");
+    el.classList.remove("hidden");
+    el.innerHTML = `<div class="picker-body">
+      <div class="row" style="align-items:flex-start"><div><h2>動画の型を選ぶ</h2><p class="lead">OPとEDが自動で流れます。クリックで選択。後からオープニング／エンディングのタブで変えられます。色・フォントも後から自由に変えられます。</p></div><span class="spacer"></span><button class="btn" data-action="picker-close">閉じる</button></div>
+      <div class="style-cards">${VC.styles.list.map((st) => `
+        <div class="style-card ${st.id === P.style ? "current" : ""}" data-action="style-choose" data-id="${st.id}">
+          <div class="pv"><div><div class="lbl">オープニング</div><canvas data-pv="op" data-style="${st.id}" width="480" height="270"></canvas></div><div><div class="lbl">エンディング</div><canvas data-pv="ed" data-style="${st.id}" width="480" height="270"></canvas></div></div>
+          <h4>${esc(st.name)} ${st.id === P.style ? `<span class="chip">現在の型</span>` : ""}</h4><p>${esc(st.desc)}</p>
+          <div class="small" style="margin-top:6px"><span class="sw" style="background:${st.colors.bg}"></span>背景　<span class="sw" style="background:${st.colors.fg}"></span>文字（既定）</div>
+        </div>`).join("")}</div></div>`;
+    pickerT0 = performance.now();
+    requestAnimationFrame(pickerLoop);
+  }
+  function closePicker() { S.picker = false; $("style-picker").classList.add("hidden"); $("style-picker").innerHTML = ""; }
+  function pickerLoop(now) {
+    if (!S.picker) return;
+    requestAnimationFrame(pickerLoop);
+    const t0 = (now - pickerT0) / 1000;
+    for (const cv of $("style-picker").querySelectorAll("canvas[data-pv]")) {
+      const D = demoOf(cv.dataset.style);
+      const c = cv.getContext("2d"), W = cv.width, H = cv.height;
+      const opD = VC.opening.duration(D), edD = VC.ending.duration(D);
+      const drawMain = (cc, w, h) => { cc.fillStyle = "#1f2937"; cc.fillRect(0, 0, w, h); cc.fillStyle = "rgba(255,255,255,.5)"; cc.font = `700 ${Math.round(h * 0.1)}px ${VC.text.FONTS.sans}`; cc.textAlign = "center"; cc.textBaseline = "middle"; cc.fillText("DEMO", w / 2, h / 2); };
+      if (cv.dataset.pv === "op") {
+        const t = t0 % (opD + 1.0);
+        if (t < opD) { const k = VC.opening.transitionK(D, t); if (k != null) VC.opening.drawTransition(c, W, H, k, D, drawMain); else VC.opening.draw(c, W, H, t, D, {}); }
+        else drawMain(c, W, H);
+      } else {
+        const t = t0 % (edD + 1.0);
+        if (t < edD) VC.ending.draw(c, W, H, t, D); else VC.ending.draw(c, W, H, edD - 0.001, D);
+      }
+    }
+  }
+  function chooseStyle(id) {
+    const st = VC.styles.get(id);
+    if (st.id !== P.style) {
+      P.style = st.id;
+      P.colors = VC.styles.defaultColors(st.id);
+      VC.opening._cache = null;
+      save();
+      toast(`型を「${st.name}」にしました`);
+    }
+    closePicker();
+    renderPanel(); renderTimeline(); setT(0, { pause: true });
+  }
+
   function panelExport() {
     const inf = info();
     const sz = sizeOf();
@@ -586,6 +714,7 @@
     else if (el.type === "range" || el.type === "number") v = Number(el.value);
     else v = el.value;
     if (path === "opening.words") v = String(v).split(/[\s,、]+/).filter(Boolean);
+    if (path === "opening.sentences") v = String(v).split(/\n/).map((x) => x.trim()).filter(Boolean);
     if (path === "output.fps") v = Number(v);
     setPath(path, v);
     if (path.startsWith("opening.")) VC.opening._cache = null;
@@ -652,6 +781,11 @@
       }
       // project tabs
       case "proj-switch": await switchProject(id); break;
+      // style picker / colors
+      case "open-picker": openPicker(); break;
+      case "picker-close": closePicker(); break;
+      case "style-choose": chooseStyle(id); break;
+      case "colors-reset": P.colors = VC.styles.defaultColors(P.style); save(); renderPanel(); toast("色・フォントを既定に戻しました"); break;
       case "proj-new": await newProject(); break;
       case "proj-close": e.stopPropagation(); await closeProject(id); break;
       // ranges
@@ -724,6 +858,7 @@
     if (e.key === "ArrowLeft") setT(S.T - (e.shiftKey ? 5 : 1), { pause: true });
     if (e.key === "ArrowRight") setT(S.T + (e.shiftKey ? 5 : 1), { pause: true });
     if (e.key === "Home") setT(0, { pause: true });
+    if (e.key === "Escape" && S.picker) { closePicker(); return; }
     if (e.key === "Escape" && S.pop) closePopover();
     if ((e.key === "Delete" || e.key === "Backspace") && S.pop && !S.pop.isNew) { P.ranges = P.ranges.filter((x) => x.id !== S.pop.r.id); save(); closePopover(); }
   });

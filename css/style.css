@@ -151,3 +151,20 @@ a { color: #a5b4fc; }
 .progress > div { height: 100%; background: linear-gradient(90deg, var(--primary), var(--ok)); transition: width .2s; }
 
 .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #fff; color: #111; padding: 10px 16px; border-radius: 10px; font-size: 13px; z-index: 100; box-shadow: 0 10px 30px rgba(0,0,0,.4); max-width: min(92vw, 560px); }
+
+/* style picker */
+.picker { position: fixed; inset: 0; z-index: 70; background: rgba(8,10,16,.88); backdrop-filter: blur(6px); display: flex; align-items: flex-start; justify-content: center; padding: 28px 20px; overflow: auto; }
+.picker-body { width: min(1100px, 96vw); }
+.picker h2 { margin: 0 0 4px; font-size: 20px; }
+.picker .lead { color: var(--muted); margin: 0 0 16px; font-size: 13px; }
+.style-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 16px; }
+.style-card { background: var(--panel); border: 1px solid var(--line-2); border-radius: 14px; padding: 14px; cursor: pointer; transition: border-color .12s, transform .12s; }
+.style-card:hover { border-color: var(--primary); transform: translateY(-2px); }
+.style-card.current { border-color: var(--ok); }
+.style-card .pv { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+.style-card canvas { width: 100%; aspect-ratio: 16 / 9; border-radius: 8px; background: #000; display: block; }
+.style-card .lbl { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+.style-card h4 { margin: 0 0 4px; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+.style-card p { margin: 0; font-size: 12px; color: var(--text-2); }
+.style-card .sw { display: inline-block; width: 14px; height: 14px; border-radius: 4px; border: 1px solid var(--line-2); vertical-align: -2px; margin-right: 4px; }
+input[type="color"] { width: 36px; height: 28px; padding: 0; border: 1px solid var(--line-2); border-radius: 6px; background: var(--bg-2); cursor: pointer; }
