@@ -314,12 +314,12 @@ VC.sting = {
     ctx.strokeStyle = "#fff";
     ctx.lineCap = "round";
 
-    // 左上：太→細の3本（長さもバラバラ）
-    this.slash(ctx, 0, 0, 1, 1, c * 0.22, c * 0.30, Math.max(3, m * 0.016));
+    // 左上：極太→細の3本（長さもバラバラ）。1本目は4倍の太さ
+    this.slash(ctx, 0, 0, 1, 1, c * 0.22, c * 0.30, Math.max(12, m * 0.064));
     this.slash(ctx, 0, 0, 1, 1, c * 0.46, c * 0.50, Math.max(2, m * 0.007));
     this.slash(ctx, 0, 0, 1, 1, c * 0.66, c * 0.18, Math.max(1.5, m * 0.004));
     // 右下：左上と同じ構成を点対称に
-    this.slash(ctx, W, H, -1, -1, c * 0.22, c * 0.30, Math.max(3, m * 0.016));
+    this.slash(ctx, W, H, -1, -1, c * 0.22, c * 0.30, Math.max(12, m * 0.064));
     this.slash(ctx, W, H, -1, -1, c * 0.46, c * 0.50, Math.max(2, m * 0.007));
     this.slash(ctx, W, H, -1, -1, c * 0.66, c * 0.18, Math.max(1.5, m * 0.004));
     // 右上・左下：細く短い1本ずつ（バランス用）
@@ -327,7 +327,7 @@ VC.sting = {
     this.slash(ctx, 0, H, 1, -1, c * 0.30, c * 0.26, Math.max(1.5, m * 0.005));
     ctx.restore();
 
-    VC.text.drawCentered(ctx, W, H, name, { sizeRatio: H > W ? 0.09 : 0.13, weight: 800, maxWRatio: 0.72, color: "#fff" });
+    VC.text.drawCentered(ctx, W, H, name, { sizeRatio: H > W ? 0.12 : 0.2, weight: 800, maxWRatio: 0.74, color: "#fff" });
   },
 };
 
