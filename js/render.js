@@ -125,6 +125,12 @@ VC.render = {
       this.drawCutFx(ctx, W, H, k, fx.type, this.snaps[seg.afterCut] || null, inc);
     } else if (v && v.videoWidth) {
       this.drawVideo(ctx, W, H, v);
+    } else if (loc.clip) {
+      ctx.fillStyle = "#1a1d26"; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = "rgba(255,255,255,.6)";
+      ctx.font = `600 ${Math.round(H * 0.045)}px ${VC.text.FONTS.sans}`;
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(`⚠ 動画「${loc.clip.name || ""}」を読み込めません（📦 メディアの状態 から復旧）`, W / 2, H / 2);
     }
     for (const c of VC.timeline.captionsAt(P.ranges, loc.src)) this.drawCaption(ctx, W, H, c, loc.src);
     if (seg && seg.beforeCut && (seg.end - loc.src) < 0.25 * seg.rate) {

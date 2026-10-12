@@ -32,6 +32,34 @@ VC.store = {
   delBlob(key) { return this.tx("readwrite", (st) => st.delete(key)); },
   clearBlobs() { return this.tx("readwrite", (st) => st.clear()); },
 
+  // File はディスク上の元ファイルへの「参照」になることがあるため、中身を完全にコピーしてから保存する
+  async copyBlob(file) {
+    const CH = 16 * 1024 * 1024;
+    if (file.size <= CH) return new Blob([await file.arrayBuffer()], { type: file.type });
+    const parts = [];
+    for (let o = 0; o < file.size; o += CH) parts.push(await file.slice(o, Math.min(file.size, o + CH)).arrayBuffer());
+    return new Blob(parts, { type: file.type });
+  },
+  async putFile(id, file) {
+    const copy = await this.copyBlob(file);
+    await this.putBlob(id, copy);
+    const stored = await this.getBlob(id);
+    return stored || copy;
+  },
+  async persist() {
+    try {
+      if (navigator.storage && navigator.storage.persist) {
+        if (navigator.storage.persisted && (await navigator.storage.persisted())) return true;
+        return await navigator.storage.persist();
+      }
+    } catch (e) { /* ignore */ }
+    return false;
+  },
+  async estimate() {
+    try { if (navigator.storage && navigator.storage.estimate) return await navigator.storage.estimate(); } catch (e) { /* ignore */ }
+    return null;
+  },
+
   uid(prefix) { return (prefix || "x") + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); },
 
   loadAll() {

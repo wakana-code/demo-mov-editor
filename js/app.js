@@ -1,5 +1,6 @@
 (function () {
   const { store, runtime } = VC;
+  runtime.missing = runtime.missing || {};
   const TL = VC.timeline, R = VC.render, INS = VC.inserts;
   const $ = (id) => document.getElementById(id);
   const canvas = $("preview");
@@ -27,6 +28,7 @@
     fileTarget: { kind: "clip" },
     imgTarget: { kind: "opening" },
     fs: null,                              // 全画面スライドエディタ
+    persisted: false, storage: null,
   };
 
   function normalizeProject(saved) {
@@ -145,23 +147,51 @@
   }
 
   // ---------- media ----------
-  function loadVideoEl(blob) {
+  function loadVideoEl(blob, id) {
     return new Promise((res, rej) => {
       const v = document.createElement("video");
       v.muted = true; v.playsInline = true; v.preload = "auto";
-      v.src = URL.createObjectURL(blob);
-      const fail = () => rej(new Error("この動画はブラウザで再生できません（HEVC収録の可能性）。QuickTimeで「書き出す → 1080p」してから追加してください"));
-      v.onerror = fail;
+      let done = false;
+      const ok = () => { if (done) return; done = true; clearTimeout(tm); v.onerror = null; if (id) watchVideo(v, id); res(v); };
+      const fail = (msg) => { if (done) return; done = true; clearTimeout(tm); try { URL.revokeObjectURL(v.src); } catch (e) {} rej(new Error(msg)); };
+      const tm = setTimeout(() => fail("読み込みがタイムアウトしました（ファイルが大きい／多すぎる可能性）。「↻ 再読み込み」を試してください"), 20000);
+      v.onerror = () => fail("この動画はブラウザで再生できません（HEVC収録の可能性）。QuickTimeで「書き出す → 1080p」してから追加してください");
       v.onloadedmetadata = () => {
         if (!isFinite(v.duration) || v.duration === 0) {
-          const onDur = () => { if (isFinite(v.duration) && v.duration > 0) { v.removeEventListener("durationchange", onDur); v.currentTime = 0; res(v); } };
+          const onDur = () => { if (isFinite(v.duration) && v.duration > 0) { v.removeEventListener("durationchange", onDur); v.currentTime = 0; ok(); } };
           v.addEventListener("durationchange", onDur);
           v.currentTime = 1e8;
-          setTimeout(() => { if (!isFinite(v.duration)) fail(); }, 4000);
-        } else res(v);
+        } else ok();
       };
+      v.src = URL.createObjectURL(blob);
     });
   }
+  // 再生中にエラーが起きたら、保存データから自動で読み直す（1回）
+  function watchVideo(v, id) {
+    v.addEventListener("error", async () => {
+      if (runtime.videos[id] !== v) return;
+      console.warn("video error → reload", id);
+      try {
+        const b = await store.getBlob(id);
+        if (!b) throw new Error("保存データが見つかりません");
+        runtime.videos[id] = await loadVideoEl(b, id);
+        delete runtime.missing[id];
+      } catch (e) {
+        runtime.missing[id] = { kind: "video", name: refName(id), error: "再生中にエラー：" + e.message };
+      }
+    });
+  }
+  function findVideoRefs(id) {
+    const out = P.clips.filter((c) => c.id === id);
+    for (const d of P.inserts) for (const pg of d.pages) if (pg.video && pg.video.id === id) out.push(pg.video);
+    return out;
+  }
+  function findImageRefs(id) {
+    const out = P.opening.images.filter((im) => im.id === id);
+    for (const d of P.inserts) for (const pg of d.pages) for (const im of pg.images) if (im.id === id) out.push(im);
+    return out;
+  }
+  function refName(id) { const r = findVideoRefs(id)[0] || findImageRefs(id)[0]; return r ? r.name : id; }
   function loadImageEl(blob) {
     return new Promise((res, rej) => {
       const img = new Image();
@@ -170,38 +200,36 @@
       img.src = URL.createObjectURL(blob);
     });
   }
+  // 復元：読めなかったものは絶対に削除せず「⚠ 読み込めない」として記録する（再読み込み／選び直しで復旧できる）
   async function restoreMedia() {
     const loadRef = async (c) => {
-      if (runtime.videos[c.id]) return true;
+      if (runtime.videos[c.id]) { delete runtime.missing[c.id]; return true; }
       try {
         const b = await store.getBlob(c.id);
-        if (!b) return false;
-        const v = await loadVideoEl(b);
+        if (!b) throw new Error("保存データが見つかりません（ブラウザに消された可能性）");
+        const v = await loadVideoEl(b, c.id);
         runtime.videos[c.id] = v;
-        c.duration = v.duration; c.width = v.videoWidth; c.height = v.videoHeight;
+        if (isFinite(v.duration) && v.duration > 0) c.duration = v.duration;
+        c.width = v.videoWidth; c.height = v.videoHeight;
+        delete runtime.missing[c.id];
         return true;
-      } catch (e) { console.warn(e); return false; }
+      } catch (e) { console.warn(e); runtime.missing[c.id] = { kind: "video", name: c.name, error: e.message }; return false; }
     };
     const loadImg = async (im) => {
-      if (runtime.images[im.id]) return true;
-      try { const b = await store.getBlob(im.id); if (!b) return false; runtime.images[im.id] = await loadImageEl(b); return true; } catch (e) { console.warn(e); return false; }
+      if (runtime.images[im.id]) { delete runtime.missing[im.id]; return true; }
+      try {
+        const b = await store.getBlob(im.id);
+        if (!b) throw new Error("保存データが見つかりません");
+        runtime.images[im.id] = await loadImageEl(b);
+        delete runtime.missing[im.id];
+        return true;
+      } catch (e) { console.warn(e); runtime.missing[im.id] = { kind: "image", name: im.name, error: e.message }; return false; }
     };
-    let changed = false;
-    const keepClips = [];
-    for (const c of P.clips) { if (await loadRef(c)) keepClips.push(c); }
-    if (keepClips.length !== P.clips.length) { P.ranges = TL.remapRanges(P.ranges, P.clips, keepClips); P.clips = keepClips; changed = true; }
-    for (const deck of P.inserts) {
-      for (const pg of deck.pages) {
-        if (pg.video && !(await loadRef(pg.video))) { pg.video = null; pg.ranges = []; changed = true; }
-        const keep = [];
-        for (const im of pg.images) { if (await loadImg(im)) keep.push(im); }
-        if (keep.length !== pg.images.length) { pg.images = keep; changed = true; }
-      }
-    }
-    const keepImgs = [];
-    for (const im of P.opening.images) { if (await loadImg(im)) keepImgs.push(im); }
-    if (keepImgs.length !== P.opening.images.length) { P.opening.images = keepImgs; changed = true; }
-    if (changed) save();
+    for (const c of P.clips) await loadRef(c);
+    for (const deck of P.inserts) for (const pg of deck.pages) { if (pg.video) await loadRef(pg.video); for (const im of pg.images) await loadImg(im); }
+    for (const im of P.opening.images) await loadImg(im);
+    const n = Object.keys(runtime.missing).length;
+    if (n) toast(`⚠ ${n}件のメディアを読み込めませんでした。「📦 メディアの状態」から再読み込み／選び直しができます`);
   }
   async function importVideoFiles(files) {
     files = [...files].filter((f) => /video|\.mov$|\.mp4$|\.webm$|\.m4v$/i.test(f.type + f.name));
@@ -209,8 +237,9 @@
     for (const f of files) {
       try {
         const id = store.uid("v");
-        await store.putBlob(id, f);
-        const v = await loadVideoEl(f);
+        const stored = await store.putFile(id, f);          // 中身をコピーして保存（元ファイルを消しても大丈夫）
+        let v;
+        try { v = await loadVideoEl(stored, id); } catch (e) { store.delBlob(id); throw e; }
         runtime.videos[id] = v;
         out.push({ id, name: f.name.replace(/\.[^.]+$/, ""), duration: v.duration, width: v.videoWidth, height: v.videoHeight, start: 0, end: null });
       } catch (e) { toast(`${f.name}: ${e.message}`); }
@@ -220,6 +249,21 @@
   // target: {kind:"clip"} | {kind:"page", deckId, pageId} | {kind:"montage-new", deckId} | {kind:"montage-add", deckId, gid}
   async function addVideoFiles(files, target) {
     target = target || { kind: "clip" };
+    if (target.kind === "reattach") {
+      const f = [...files][0];
+      if (!f) return;
+      try {
+        const stored = await store.putFile(target.id, f);
+        const v = await loadVideoEl(stored, target.id);
+        runtime.videos[target.id] = v;
+        delete runtime.missing[target.id];
+        for (const r of findVideoRefs(target.id)) { r.duration = v.duration; r.width = v.videoWidth; r.height = v.videoHeight; }
+        R.snaps = {};
+        save(); renderPanel(); renderTimeline(); if (S.fs) renderFs();
+        toast("動画を選び直しました");
+      } catch (e) { toast(`選び直しに失敗：${e.message}`); }
+      return;
+    }
     const list = await importVideoFiles(files);
     if (!list.length) { toast("動画ファイルを選んでください"); return; }
     if (target.kind === "clip") {
@@ -260,12 +304,23 @@
     target = target || { kind: "opening" };
     files = [...files].filter((f) => /^image\//.test(f.type));
     if (!files.length) { toast("画像ファイルを選んでください"); return; }
+    if (target.kind === "reattach") {
+      try {
+        const stored = await store.putFile(target.id, files[0]);
+        runtime.images[target.id] = await loadImageEl(stored);
+        delete runtime.missing[target.id];
+        VC.opening._cache = null;
+        save(); renderPanel(); if (S.fs) renderFs();
+        toast("画像を選び直しました");
+      } catch (e) { toast(`選び直しに失敗：${e.message}`); }
+      return;
+    }
     const loaded = [];
     for (const f of files) {
       try {
         const id = store.uid("i");
-        await store.putBlob(id, f);
-        runtime.images[id] = await loadImageEl(f);
+        const stored = await store.putFile(id, f);
+        try { runtime.images[id] = await loadImageEl(stored); } catch (e) { store.delBlob(id); throw e; }
         loaded.push({ id, name: f.name || "pasted" });
       } catch (e) { toast(e.message); }
     }
@@ -757,7 +812,24 @@
         ${num("長さ", "cutFx.dur", P.cutFx.dur, 0.1, 0.8, 0.05, "秒")}
       </div>
       <div class="note">ここは「既定」の演出です。カットごとに変えたいときは、再生バーのカット範囲をクリック → 「切り替わりの演出」で個別に選べます。</div>
-      <div class="note">再生できない場合（HEVC収録など）は、QuickTime Player で「ファイル → 書き出す → 1080p」してから追加してください。</div>`;
+      <div class="note">再生できない場合（HEVC収録など）は、QuickTime Player で「ファイル → 書き出す → 1080p」してから追加してください。</div>
+      ${mediaStatusHtml()}`;
+  }
+  function mediaStatusHtml() {
+    const miss = Object.entries(runtime.missing || {});
+    const est = S.storage;
+    const used = est && est.usage != null ? `${(est.usage / 1048576).toFixed(0)}MB 使用` : "";
+    const quota = est && est.quota ? ` / 空き約 ${((est.quota - (est.usage || 0)) / 1073741824).toFixed(1)}GB` : "";
+    return `
+      <h3 style="margin-top:4px">📦 メディアの状態 <span class="small">${S.persisted ? "🔒 ストレージ保護あり" : "保護なし"}${used ? `　${used}${quota}` : ""}</span></h3>
+      ${miss.length ? miss.map(([id, m]) => `
+        <div class="clip-item">
+          <span class="n">⚠ ${m.kind === "video" ? "🎥" : "🖼"} ${esc(m.name || id)}</span>
+          <span class="small" style="flex:1;min-width:120px">${esc(m.error || "")}</span>
+          <button class="btn btn-sm" data-action="media-reattach" data-id="${id}" data-kind="${m.kind}" style="width:auto;padding:0 8px">ファイルを選び直す</button>
+        </div>`).join("") + `<div class="row"><button class="btn btn-sm btn-primary" data-action="media-retry">↻ 再読み込み</button><span class="small">一時的なエラーなら再読み込みで直ります。元ファイルがあれば「選び直す」で復旧（編集内容はそのまま）</span></div>`
+      : `<div class="small">✅ すべて読み込めています。${S.persisted ? "" : "（ブラウザがストレージを保護していないため、容量不足時に消される可能性があります。このサイトをブックマークして使い続けると保護されやすくなります）"}</div>`}
+      <div class="note">追加した動画・画像は中身をブラウザ内（IndexedDB）に<b>コピー</b>して保存します。元のファイルを移動・削除・変換しても消えません。読み込めなかったものもプロジェクトからは消さず、ここに残します。</div>`;
   }
   function panelEnding() {
     const e = P.ending;
@@ -785,7 +857,8 @@
         <button class="btn btn-sm" data-action="ins-preview" data-id="${x.id}">▶</button>
         <button class="btn btn-sm" data-action="ins-place" data-id="${x.id}">📍</button>
         <button class="btn btn-sm btn-danger" data-action="ins-del" data-id="${x.id}">✕</button>
-      </div>`).join("") : `<div class="note">文字・画像・動画のページや、複数動画のモンタージュを全画面エディタで作り、本編の好きな位置に埋め込めます。「📍」で再生バーの位置をクリック → 決定。</div>`}`;
+      </div>`).join("") : `<div class="note">文字・画像・動画のページや、複数動画のモンタージュを全画面エディタで作り、本編の好きな位置に埋め込めます。「📍」で再生バーの位置をクリック → 決定。</div>`}
+      ${Object.keys(runtime.missing || {}).length ? mediaStatusHtml() : ""}`;
   }
   function panelExport() {
     const inf = R.info(P);
@@ -1347,6 +1420,18 @@
       case "export": doExport(); break;
       case "export-cancel": S.cancelExport = true; break;
       case "wipe": { if (!confirm("全プロジェクトのクリップ・画像・設定をすべて削除します。よろしいですか？")) break; await store.clearAll(); location.reload(); break; }
+      case "media-retry": {
+        toast("再読み込み中…");
+        await restoreMedia();
+        S.storage = await store.estimate();
+        renderPanel(); renderTimeline(); if (S.fs) renderFs();
+        if (!Object.keys(runtime.missing).length) toast("すべて読み込めました");
+        break;
+      }
+      case "media-reattach":
+        if (el.dataset.kind === "video") { S.fileTarget = { kind: "reattach", id }; $("file-video").click(); }
+        else { S.imgTarget = { kind: "reattach", id }; $("file-image").click(); }
+        break;
       case "proj-switch": await switchProject(id); break;
       case "proj-new": await newProject(); break;
       case "proj-close": e.stopPropagation(); await closeProject(id); break;
@@ -1490,6 +1575,8 @@
     renderTimeline(); renderModeBar();
     updateHUD();
     requestAnimationFrame(tick);
+    S.persisted = await store.persist();
+    S.storage = await store.estimate();
     await restoreMedia();
     renderPanel(); renderTimeline(); setT(0, { pause: true });
     const sz = sizeOf();
