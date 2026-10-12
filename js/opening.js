@@ -197,12 +197,12 @@ VC.opening = {
     let x, shown, blur = 0, alpha = 1;
     if (lt < stay) {
       const f = Math.min(1, lt / stay);
-      x = -drift + 2 * drift * (1 - Math.pow(1 - f, 1.6));
+      x = drift - 2 * drift * (1 - Math.pow(1 - f, 1.6));
       shown = Math.min(chars.length, Math.floor(lt / s.charDur) + 1);
     } else {
       const q = Math.min(1, (lt - stay) / Math.max(0.01, s.exitDur));
       const e = q * q * q;
-      x = drift - e * W * 1.3;
+      x = -drift - e * W * 1.3;
       blur = Math.sin(Math.PI * q);
       shown = chars.length;
       alpha = 1 - Math.max(0, q - 0.8) / 0.2;
@@ -413,15 +413,11 @@ VC.sting = {
     ctx.strokeStyle = colors.fg;
     ctx.lineCap = "round";
     if (VC.opening.isType(P, "typewriter")) {
-      // 隅に、大きさ・太さの違うリング（枠では囲まない）
+      // 隅に、極太のリングと、それに被さる細いリング（枠では囲まない）
       this.ring(ctx, c * 0.1, c * 0.1, c * 0.55, m * 0.05);
       this.ring(ctx, c * 0.58, c * 0.36, c * 0.16, m * 0.006);
-      this.ring(ctx, c * 0.3, c * 0.78, c * 0.08, m * 0.012);
       this.ring(ctx, W - c * 0.1, H - c * 0.1, c * 0.55, m * 0.05);
       this.ring(ctx, W - c * 0.58, H - c * 0.36, c * 0.16, m * 0.006);
-      this.ring(ctx, W - c * 0.3, H - c * 0.78, c * 0.08, m * 0.012);
-      this.ring(ctx, W - c * 0.28, c * 0.22, c * 0.3, m * 0.003);
-      this.ring(ctx, c * 0.22, H - c * 0.26, c * 0.12, m * 0.02);
     } else {
       this.slash(ctx, 0, 0, 1, 1, c * 0.22, c * 0.30, Math.max(12, m * 0.064));
       this.slash(ctx, 0, 0, 1, 1, c * 0.46, c * 0.50, Math.max(2, m * 0.007));

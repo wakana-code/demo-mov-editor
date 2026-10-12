@@ -59,12 +59,15 @@
         <div class="tl-track" id="tl-track">
           <div class="tl-clips" id="tl-clips"></div>
           <div class="tl-ranges" id="tl-ranges"></div>
+          <div class="tl-inserts" id="tl-inserts"></div>
           <div class="tl-selection hidden" id="tl-selection"></div>
+          <div class="tl-ghost hidden" id="tl-ghost"></div>
           <div class="tl-playhead" id="tl-playhead"></div>
         </div>
         <div class="tl-block" id="tl-end" title="エンディング（クリックでプレビュー）">ED</div>
       </div>
-      <div class="tl-hint">クリック：その時点へ　｜　<b>ダブルクリックしてそのままドラッグ</b>：範囲を選んで「字幕 / 倍速 / カット」　｜　範囲をクリック：編集</div>
+      <div class="tl-hint" id="tl-hint">クリック：その時点へ　｜　<b>ダブルクリックしてそのままドラッグ</b>：範囲を選んで「字幕 / 倍速 / カット」　｜　範囲をクリック：編集</div>
+      <div id="place-bar" class="place-bar hidden"></div>
 
       <div id="range-popover" class="popover hidden"></div>
       <div id="range-list" class="range-list"></div>
@@ -74,6 +77,7 @@
       <div class="tabs" id="tabs">
         <button class="active" data-tab="opening">🎞 オープニング</button>
         <button data-tab="clips">📹 クリップ</button>
+        <button data-tab="embed">🧩 埋め込み</button>
         <button data-tab="ending">🔚 エンディング</button>
         <button data-tab="export">⬇ 書き出し</button>
       </div>
@@ -89,6 +93,7 @@
   <script src="js/store.js"></script>
   <script src="js/opening.js"></script>
   <script src="js/timeline.js"></script>
+  <script src="js/inserts.js"></script>
   <script src="js/render.js"></script>
   <script src="js/export.js"></script>
   <script src="js/app.js"></script>

@@ -47,6 +47,11 @@ VC.exporter = {
 
   async prepare(P, runtime, info, T) {
     const loc = VC.render.locate(P, T, info);
+    if (loc.phase === "insert") {
+      const st = VC.inserts.videoState(loc.ins, loc.local);
+      if (st && runtime.videos[st.id]) await this.seekTo(runtime.videos[st.id], st.time);
+      return loc;
+    }
     if ((loc.phase === "main" || loc.trans != null) && loc.clip) {
       const v = runtime.videos[loc.clip.id];
       if (v) await this.seekTo(v, loc.clipLocal);
