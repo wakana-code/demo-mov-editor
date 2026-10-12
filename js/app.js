@@ -26,6 +26,8 @@
     selIns: null, selSlide: null,                        // 埋め込みタブで選択中
     place: null, placeAt: null,                          // 配置モード
     fileTarget: { kind: "clip" },
+    imgTarget: { kind: "opening" },                      // 画像ファイルの追加先
+    fs: null,                                            // 全画面スライド編集 { insId, slideId, selImg, crop, drag }
   };
 
   function normalizeProject(saved) {
@@ -167,6 +169,7 @@
     pause();
     flushSave();
     if (S.pop) closePopover();
+    if (S.fs) closeFs(true);
     S.mode = "project"; S.modeIns = null; S.modeSlide = null; S.place = null; S.selIns = null; S.selSlide = null;
     P = normalizeProject(next);
     store.setCurrentId(P.id);
@@ -197,6 +200,7 @@
     if (!confirm(`「${p.name}」を削除しますか？（クリップ・画像・設定が消えます）`)) return;
     for (const c of allVideoRefs(p)) { delete runtime.videos[c.id]; store.delBlob(c.id); }
     for (const im of (p.opening && p.opening.images) || []) { delete runtime.images[im.id]; store.delBlob(im.id); }
+    for (const ins of p.inserts || []) for (const im of INS.imageRefs(ins)) { delete runtime.images[im.id]; store.delBlob(im.id); }
     store.deleteProject(id);
     if (id === P.id) {
       const rest = store.list();
@@ -263,7 +267,15 @@
         for (const v of ins.videos) { if (await loadRef(v)) keep.push(v); }
         if (keep.length !== ins.videos.length) { ins.videos = keep; changed = true; }
       } else {
-        for (const s of ins.slides) { if (s.video && !(await loadRef(s.video))) { s.video = null; s.ranges = []; changed = true; } }
+        for (const s of ins.slides) {
+          if (s.video && !(await loadRef(s.video))) { s.video = null; s.ranges = []; changed = true; }
+          const keep = [];
+          for (const im of s.images || []) {
+            if (runtime.images[im.id]) { keep.push(im); continue; }
+            try { const b = await store.getBlob(im.id); if (!b) continue; runtime.images[im.id] = await loadImageEl(b); keep.push(im); } catch (e) { console.warn(e); }
+          }
+          if (keep.length !== (s.images || []).length) { s.images = keep; changed = true; }
+        }
       }
     }
     const keepImgs = [];
@@ -318,20 +330,40 @@
     R.snaps = {};
     save(); renderPanel(); renderTimeline(); updateHUD();
   }
-  async function addImageFiles(files) {
+  async function addImageFiles(files, target) {
+    target = target || { kind: "opening" };
     files = [...files].filter((f) => /^image\//.test(f.type));
     if (!files.length) { toast("画像ファイルを選んでください"); return; }
+    const loaded = [];
     for (const f of files) {
       try {
         const id = store.uid("i");
         await store.putBlob(id, f);
         runtime.images[id] = await loadImageEl(f);
-        P.opening.images.push({ id, name: f.name || "pasted" });
+        loaded.push({ id, name: f.name || "pasted" });
       } catch (e) { toast(e.message); }
     }
+    if (!loaded.length) return;
+    if (target.kind === "slide") {
+      const ins = insById(target.insId);
+      const s = ins && ins.type === "slides" ? ins.slides.find((x) => x.id === target.slideId) : null;
+      if (!s) { for (const l of loaded) { delete runtime.images[l.id]; store.delBlob(l.id); } return; }
+      const sz = sizeOf();
+      for (const l of loaded) {
+        const img = runtime.images[l.id];
+        const im = INS.newImage(l.id, l.name, img.naturalWidth, img.naturalHeight, sz.w, sz.h);
+        im.x += (s.images.length % 5) * 0.03; im.y += (s.images.length % 5) * 0.03;
+        s.images.push(im);
+      }
+      save();
+      if (S.fs) { S.fs.selImg = loaded[loaded.length - 1].id; S.fs.crop = false; renderFs(); } else renderPanel();
+      toast(`スライドに画像を${loaded.length}枚追加しました`);
+      return;
+    }
+    P.opening.images.push(...loaded);
     VC.opening._cache = null;
     save(); renderPanel();
-    toast(`画像を${files.length}枚追加しました`);
+    toast(`画像を${loaded.length}枚追加しました`);
   }
 
   // ---------- playback ----------
@@ -740,7 +772,7 @@
     const cls = sz.h > sz.w ? "v" : sz.h === sz.w ? "sq" : "";
     const inSlideMode = S.mode === "slide" && S.modeIns === ins.id && S.modeSlide === s.id;
     return `
-      <h3 style="margin-top:4px">💬 スライド <span class="small">${ins.slides.length}枚・合計 ${INS.duration(ins).toFixed(1)}秒</span></h3>
+      <h3 style="margin-top:4px">💬 スライド <span class="small">${ins.slides.length}枚・合計 ${INS.duration(ins).toFixed(1)}秒</span><span class="spacer"></span><button class="btn btn-sm btn-primary" data-action="fs-open">⛶ 全画面で編集</button></h3>
       <div class="slide-tabs">
         ${ins.slides.map((x, i) => `<button class="btn btn-sm ${x.id === s.id ? "active" : ""}" data-action="slide-select" data-id="${x.id}">${i + 1}${x.video ? " 🎥" : ""}</button>`).join("")}
         <button class="btn btn-sm" data-action="slide-add">＋ スライド追加</button>
@@ -759,15 +791,18 @@
           ${[1, 2, 3, 4, 5, 6, 7].map((n) => `<button class="btn btn-sm" data-cmd="fontSize" data-arg="${n}" data-keepfocus="1" style="padding:0 7px">${["xs", "s", "標準", "L", "XL", "2XL", "3XL"][n - 1]}</button>`).join("")}
           <button class="btn btn-sm" data-cmd="removeFormat" data-keepfocus="1" title="装飾を解除">解除</button>
         </div>
-        <div id="slide-editor" class="slide-editor ${cls} pos-${s.pos}" contenteditable="true" data-slide-html="1" style="background:${esc(colors.bg)};color:${esc(colors.fg)};font-family:${VC.text.FONTS[colors.font] || VC.text.FONTS.sans}" spellcheck="false">${s.html || ""}</div>
+        <div id="slide-editor" class="slide-editor ${cls} pos-${s.pos} al-${s.align}" contenteditable="true" data-slide-html="1" style="background:${esc(colors.bg)};color:${esc(colors.fg)};font-family:${VC.text.FONTS[colors.font] || VC.text.FONTS.sans}" spellcheck="false">${s.html || ""}</div>
+      </div>
+      <div class="row align-btns">
+        <span class="small">揃え</span>${alignBtns(s)}
+        <span class="small" style="margin-left:6px">位置</span><select data-sb="pos" style="width:auto"><option value="center" ${s.pos === "center" ? "selected" : ""}>中央</option><option value="top" ${s.pos === "top" ? "selected" : ""}>上</option><option value="bottom" ${s.pos === "bottom" ? "selected" : ""}>下</option></select>
       </div>
       <div class="row">
-        <span class="small">位置</span><select data-sb="pos" style="width:auto"><option value="center" ${s.pos === "center" ? "selected" : ""}>中央</option><option value="top" ${s.pos === "top" ? "selected" : ""}>上</option><option value="bottom" ${s.pos === "bottom" ? "selected" : ""}>下</option></select>
-        <span class="spacer"></span>
         <label class="small row" style="gap:4px">背景 <input type="color" data-sb="bg" value="${esc(colors.bg)}"></label>
         <label class="small row" style="gap:4px">文字 <input type="color" data-sb="fg" value="${esc(colors.fg)}"></label>
         <button class="btn btn-sm" data-action="slide-colors-reset" title="テーマの色に戻す">テーマ色</button>
       </div>
+      ${slideImagesBlock(s)}
       ${s.video ? `
         <div class="clip-item">
           <span class="n">🎥 ${esc(s.video.name)}</span><span class="m">${TL.fmt(s.video.duration)}　→ ${INS.slideDuration(s).toFixed(1)}秒</span>
@@ -855,19 +890,223 @@
     S.place = null; S.placeAt = null;
     renderModeBar(); renderTimeline(); renderPanel(); setT(S.T, { pause: true });
   }
+  function alignBtns(s) {
+    return [["left", "⇤ 左"], ["center", "↔ 中央"], ["right", "⇥ 右"]].map(([a, l]) => `<button class="btn btn-sm ${(s.align || "center") === a ? "active" : ""}" data-action="slide-align" data-al="${a}">${l}</button>`).join("");
+  }
+  function slideImagesBlock(s) {
+    return `
+      <div class="field"><label>画像（${s.images.length}）</label>
+        <div class="row"><button class="btn btn-sm" data-action="slide-img-add">＋ 画像を追加</button><span class="small">Cmd+V でも可。位置・大きさ・切り取りは「⛶ 全画面で編集」で</span></div>
+        ${s.images.length ? `<div class="thumbs" style="margin-top:6px">${s.images.map((im) => `<div class="thumb"><img src="${runtime.images[im.id] ? runtime.images[im.id].src : ""}" alt=""><button class="x" data-action="slide-img-del" data-id="${im.id}">✕</button></div>`).join("")}</div>` : ""}
+      </div>`;
+  }
   function slideHtmlInput(el) {
     const s = selSlide();
     if (!s) return;
     s.html = el.innerHTML;
     save();
+    if (S.fs) drawFsText();
   }
   function execCmd(cmd, arg) {
-    const ed = $("slide-editor");
+    const ed = S.fs ? $("fs-editor") : $("slide-editor");
     if (!ed) return;
     ed.focus();
     try { document.execCommand("styleWithCSS", false, false); document.execCommand(cmd, false, arg || null); } catch (e) {}
     slideHtmlInput(ed);
   }
+
+  // ---------- 全画面スライド編集 ----------
+  function imageTarget() {
+    if (S.fs) return { kind: "slide", insId: S.fs.insId, slideId: S.fs.slideId };
+    if (S.tab === "embed") { const ins = selIns(), s = selSlide(); if (ins && s && ins.type === "slides") return { kind: "slide", insId: ins.id, slideId: s.id }; }
+    return { kind: "opening" };
+  }
+  function fsSlide() {
+    const ins = S.fs ? insById(S.fs.insId) : null;
+    return ins && ins.type === "slides" ? ins.slides.find((x) => x.id === S.fs.slideId) || null : null;
+  }
+  function openFs(insId, slideId) {
+    const ins = insById(insId);
+    if (!ins || ins.type !== "slides") return;
+    const s = ins.slides.find((x) => x.id === slideId) || ins.slides[0];
+    if (!s) return;
+    pause();
+    if (S.pop) closePopover();
+    S.selIns = ins.id; S.selSlide = s.id;
+    S.fs = { insId: ins.id, slideId: s.id, selImg: null, crop: false, drag: null };
+    $("slide-fs").classList.remove("hidden");
+    renderFs();
+  }
+  function closeFs(silent) {
+    S.fs = null;
+    $("slide-fs").classList.add("hidden");
+    $("slide-fs").innerHTML = "";
+    if (!silent) { renderPanel(); renderTimeline(); }
+  }
+  function renderFs() {
+    const ins = S.fs ? insById(S.fs.insId) : null;
+    const s = fsSlide();
+    if (!ins || !s) { closeFs(); return; }
+    const idx = ins.slides.indexOf(s);
+    const colors = INS.colorsOf(s, P);
+    $("slide-fs").innerHTML = `
+      <div class="fs-top">
+        <b>⛶ スライド編集</b><span class="small">${esc(INS.label(ins))}</span>
+        <div class="slide-tabs">${ins.slides.map((x, i) => `<button class="btn btn-sm ${x.id === s.id ? "active" : ""}" data-action="fs-slide-select" data-id="${x.id}">${i + 1}${x.video ? " 🎥" : ""}${x.images.length ? " 🖼" : ""}</button>`).join("")}<button class="btn btn-sm" data-action="fs-slide-add" title="スライドを追加">＋</button></div>
+        <span class="spacer"></span>
+        <button class="btn btn-sm ${S.fs.crop ? "btn-primary" : ""}" data-action="fs-crop" ${S.fs.selImg ? "" : "disabled"}>✂ 切り取りモード</button>
+        <button class="btn btn-sm" data-action="fs-preview">▶ プレビュー</button>
+        <button class="btn btn-sm btn-primary" data-action="fs-close">✓ 完了</button>
+      </div>
+      <div class="fs-stage-wrap" id="fs-wrap">
+        <div class="fs-stage ${S.fs.crop ? "crop" : ""}" id="fs-stage"><canvas id="fs-bg"></canvas><div id="fs-imgs"></div><canvas id="fs-text" class="fs-text"></canvas></div>
+        <div class="fs-hint">${S.fs.crop ? "画像の4辺のバーをドラッグして切り取り（Esc または「✂」でモード終了）" : "画像：ドラッグで移動 ／ 右下の■で拡大縮小 ／ 選んで「✂ 切り取り」 ／ Delete で削除　｜　Cmd+V で画像を貼り付け"}</div>
+      </div>
+      <div class="fs-side">
+        <h4>文字</h4>
+        <div class="ed-toolbar">
+          <button class="btn btn-sm" data-cmd="bold" data-keepfocus="1" title="太字"><b>B</b></button>
+          <button class="btn btn-sm" data-cmd="underline" data-keepfocus="1" title="下線"><u>U</u></button>
+          <span class="small" style="align-self:center;margin-left:4px">サイズ</span>
+          ${[1, 2, 3, 4, 5, 6, 7].map((n) => `<button class="btn btn-sm" data-cmd="fontSize" data-arg="${n}" data-keepfocus="1" style="padding:0 7px">${["xs", "s", "標準", "L", "XL", "2XL", "3XL"][n - 1]}</button>`).join("")}
+          <button class="btn btn-sm" data-cmd="removeFormat" data-keepfocus="1" title="装飾を解除">解除</button>
+        </div>
+        <div id="fs-editor" class="slide-editor pos-${s.pos} al-${s.align}" contenteditable="true" data-slide-html="1" style="background:${esc(colors.bg)};color:${esc(colors.fg)};font-family:${VC.text.FONTS[colors.font] || VC.text.FONTS.sans}" spellcheck="false">${s.html || ""}</div>
+        <div class="row align-btns"><span class="small">揃え</span>${alignBtns(s)}</div>
+        <div class="row"><span class="small">位置</span><select data-sb="pos" style="width:auto"><option value="center" ${s.pos === "center" ? "selected" : ""}>中央</option><option value="top" ${s.pos === "top" ? "selected" : ""}>上</option><option value="bottom" ${s.pos === "bottom" ? "selected" : ""}>下</option></select>
+          <span class="spacer"></span>
+          <label class="small row" style="gap:4px">背景 <input type="color" data-sb="bg" value="${esc(colors.bg)}"></label>
+          <label class="small row" style="gap:4px">文字 <input type="color" data-sb="fg" value="${esc(colors.fg)}"></label>
+          <button class="btn btn-sm" data-action="slide-colors-reset" title="テーマの色に戻す">テーマ色</button></div>
+        <h4>画像（${s.images.length}）</h4>
+        <div class="row"><button class="btn btn-sm" data-action="slide-img-add">＋ 画像を追加</button><span class="small">または Cmd+V</span></div>
+        ${s.images.map((im, i) => `
+          <div class="clip-item" style="${S.fs.selImg === im.id ? "border-color:var(--primary)" : ""}">
+            <span class="n" style="cursor:pointer" data-action="fs-img-select" data-id="${im.id}">🖼 ${esc(im.name)}</span>
+            <button class="btn" data-action="fs-img-order" data-id="${im.id}" data-d="-1" ${i === 0 ? "disabled" : ""} title="後ろへ">↓</button>
+            <button class="btn" data-action="fs-img-order" data-id="${im.id}" data-d="1" ${i === s.images.length - 1 ? "disabled" : ""} title="前へ">↑</button>
+            <button class="btn btn-danger" data-action="fs-img-del" data-id="${im.id}" title="削除">✕</button>
+          </div>`).join("")}
+        <h4>スライド</h4>
+        ${s.video ? `<div class="note">🎥 動画「${esc(s.video.name)}」が載っています（長さは動画に合わせます）。動画の倍速・カット・字幕は、完了後に「✂ 再生バーで編集」から。</div>` : num("表示時間", "__slide.dur", s.dur, 0.3, 10, 0.1, "秒")}
+        <div class="row">
+          <button class="btn btn-sm" data-action="fs-move" data-d="-1" ${idx === 0 ? "disabled" : ""}>← 前のスライド</button>
+          <button class="btn btn-sm" data-action="fs-move" data-d="1" ${idx === ins.slides.length - 1 ? "disabled" : ""}>次のスライド →</button>
+          <span class="spacer"></span>
+          <button class="btn btn-sm btn-danger" data-action="fs-slide-del" ${ins.slides.length <= 1 ? "disabled" : ""}>このスライドを削除</button>
+        </div>
+      </div>`;
+    fitFsStage();
+    renderFsStage();
+  }
+  function fitFsStage() {
+    const wrap = $("fs-wrap"), st = $("fs-stage");
+    if (!wrap || !st) return;
+    const sz = sizeOf();
+    const aw = wrap.clientWidth - 40, ah = wrap.clientHeight - 60;
+    let w = aw, h = (w * sz.h) / sz.w;
+    if (h > ah) { h = ah; w = (h * sz.w) / sz.h; }
+    st.style.width = `${Math.max(100, w)}px`;
+    st.style.height = `${Math.max(60, h)}px`;
+  }
+  function renderFsStage() {
+    const s = fsSlide(), st = $("fs-stage");
+    if (!s || !st) return;
+    st.classList.toggle("crop", !!S.fs.crop);
+    const sz = sizeOf();
+    const bg = $("fs-bg"); bg.width = sz.w; bg.height = sz.h;
+    INS.drawSlide(bg.getContext("2d"), sz.w, sz.h, s, 0, P, runtime, { noImages: true, noText: true, static: true });
+    const tx = $("fs-text"); tx.width = sz.w; tx.height = sz.h;
+    drawFsText();
+    $("fs-imgs").innerHTML = s.images.map((im) => imgElHtml(im)).join("");
+    for (const im of s.images) updateImgEl(im);
+  }
+  function drawFsText() {
+    const s = fsSlide(), cv = $("fs-text");
+    if (!s || !cv) return;
+    const c = cv.getContext("2d");
+    c.clearRect(0, 0, cv.width, cv.height);
+    if (!INS.hasText(s)) return;
+    const colors = INS.colorsOf(s, P);
+    VC.text.use(colors);
+    INS.drawText(c, cv.width, cv.height, INS.parseHtml(s.html), 0, INS.slideDuration(s), P, colors, { pos: s.pos || "center", align: s.align || "center", overMedia: !!s.video || s.images.length > 0, static: true });
+  }
+  function imgElHtml(im) {
+    const img = runtime.images[im.id];
+    return `<div class="fs-img ${S.fs.selImg === im.id ? "sel" : ""}" data-img="${im.id}"><img src="${img ? img.src : ""}" alt=""><div class="h"></div><div class="e l" data-edge="l"></div><div class="e r" data-edge="r"></div><div class="e t" data-edge="t"></div><div class="e b" data-edge="b"></div></div>`;
+  }
+  function updateImgEl(im) {
+    const box = $("fs-imgs");
+    const el = box && box.querySelector(`[data-img="${im.id}"]`);
+    if (!el) return;
+    el.style.left = `${im.x * 100}%`; el.style.top = `${im.y * 100}%`; el.style.width = `${im.w * 100}%`; el.style.height = `${im.h * 100}%`;
+    const img = el.querySelector("img");
+    img.style.width = `${100 / im.sw}%`; img.style.height = `${100 / im.sh}%`;
+    img.style.left = `${-(im.sx / im.sw) * 100}%`; img.style.top = `${-(im.sy / im.sh) * 100}%`;
+    el.classList.toggle("sel", S.fs.selImg === im.id);
+  }
+  function fsSelectImg(id) {
+    S.fs.selImg = id;
+    if (!id) S.fs.crop = false;
+    const box = $("fs-imgs");
+    if (box) for (const el of box.querySelectorAll(".fs-img")) el.classList.toggle("sel", el.dataset.img === id);
+    const st = $("fs-stage"); if (st) st.classList.toggle("crop", !!S.fs.crop);
+    const b = $("slide-fs").querySelector('[data-action="fs-crop"]');
+    if (b) { b.disabled = !id; b.classList.toggle("btn-primary", !!S.fs.crop); }
+  }
+  function fsDeleteImage(id) {
+    const s = fsSlide();
+    if (!s) return;
+    s.images = s.images.filter((x) => x.id !== id);
+    delete runtime.images[id]; store.delBlob(id);
+    S.fs.selImg = null; S.fs.crop = false;
+    save(); renderFs();
+  }
+  const fsEl = $("slide-fs");
+  fsEl.addEventListener("pointerdown", (e) => {
+    if (!S.fs) return;
+    const stage = $("fs-stage");
+    if (!stage || !stage.contains(e.target)) return;
+    const s = fsSlide();
+    if (!s) return;
+    const imEl = e.target.closest(".fs-img");
+    if (!imEl) { if (S.fs.selImg) fsSelectImg(null); return; }
+    const im = s.images.find((x) => x.id === imEl.dataset.img);
+    if (!im) return;
+    if (S.fs.selImg !== im.id) fsSelectImg(im.id);
+    const rect = stage.getBoundingClientRect();
+    const nx = (e.clientX - rect.left) / rect.width, ny = (e.clientY - rect.top) / rect.height;
+    let kind = "move", edge = null;
+    if (e.target.classList.contains("h")) kind = "resize";
+    else if (e.target.classList.contains("e") && S.fs.crop) { kind = "crop"; edge = e.target.dataset.edge; }
+    else if (S.fs.crop) return;
+    S.fs.drag = { kind, edge, id: im.id, nx, ny, orig: Object.assign({}, im), rect };
+    try { stage.setPointerCapture(e.pointerId); } catch (x) {}
+    e.preventDefault();
+  });
+  fsEl.addEventListener("pointermove", (e) => {
+    const d = S.fs && S.fs.drag;
+    if (!d) return;
+    const s = fsSlide();
+    const im = s && s.images.find((x) => x.id === d.id);
+    if (!im) return;
+    const nx = (e.clientX - d.rect.left) / d.rect.width, ny = (e.clientY - d.rect.top) / d.rect.height;
+    const dx = nx - d.nx, dy = ny - d.ny, o = d.orig;
+    if (d.kind === "move") { im.x = o.x + dx; im.y = o.y + dy; }
+    else if (d.kind === "resize") { const nw = Math.max(0.03, o.w + dx); im.w = nw; im.h = o.h * (nw / o.w); }
+    else if (d.kind === "crop") {
+      const rx = o.sw / o.w, ry = o.sh / o.h;
+      if (d.edge === "l") { const a = Math.max(-o.sx / rx, Math.min(dx, o.w - 0.03)); im.x = o.x + a; im.w = o.w - a; im.sx = o.sx + a * rx; im.sw = o.sw - a * rx; }
+      if (d.edge === "r") { const a = Math.max(0.03 - o.w, Math.min(dx, (1 - o.sx - o.sw) / rx)); im.w = o.w + a; im.sw = o.sw + a * rx; }
+      if (d.edge === "t") { const a = Math.max(-o.sy / ry, Math.min(dy, o.h - 0.03)); im.y = o.y + a; im.h = o.h - a; im.sy = o.sy + a * ry; im.sh = o.sh - a * ry; }
+      if (d.edge === "b") { const a = Math.max(0.03 - o.h, Math.min(dy, (1 - o.sy - o.sh) / ry)); im.h = o.h + a; im.sh = o.sh + a * ry; }
+    }
+    updateImgEl(im);
+  });
+  const fsEndDrag = () => { if (S.fs && S.fs.drag) { S.fs.drag = null; save(); } };
+  fsEl.addEventListener("pointerup", fsEndDrag);
+  fsEl.addEventListener("pointercancel", fsEndDrag);
+  window.addEventListener("resize", () => { if (S.fs) fitFsStage(); });
 
   // ---------- 型の選択画面 ----------
   const demos = {};
@@ -945,6 +1184,7 @@
   // ---------- export ----------
   async function doExport() {
     if (S.exporting) return;
+    if (S.fs) closeFs();
     if (S.mode !== "project") exitMode();
     if (S.place) finishPlace(false);
     const inf = R.info(P);
@@ -1022,7 +1262,12 @@
     if (el.dataset && el.dataset.slideHtml) { slideHtmlInput(el); return; }
     if (el.dataset && el.dataset.sb) {
       const s = selSlide(); if (!s) return;
-      if (el.dataset.sb === "bg" || el.dataset.sb === "fg") { s[el.dataset.sb] = el.value; const ed = $("slide-editor"); if (ed) ed.style[el.dataset.sb === "bg" ? "background" : "color"] = el.value; save(); }
+      if (el.dataset.sb === "bg" || el.dataset.sb === "fg") {
+        s[el.dataset.sb] = el.value;
+        for (const ed of [$("slide-editor"), $("fs-editor")]) if (ed) ed.style[el.dataset.sb === "bg" ? "background" : "color"] = el.value;
+        save();
+        if (S.fs) renderFsStage();
+      }
       return;
     }
     if (el.dataset && el.dataset.mv) {
@@ -1038,9 +1283,13 @@
   document.addEventListener("change", (e) => {
     const el = e.target;
     if (el.dataset && el.dataset.bind) { onBind(el, el.type !== "range"); return; }
-    if (el.dataset && el.dataset.sb === "pos") { const s = selSlide(); if (s) { s.pos = el.value; save(); const ed = $("slide-editor"); if (ed) ed.className = ed.className.replace(/pos-\w+/, `pos-${s.pos}`); } return; }
+    if (el.dataset && el.dataset.sb === "pos") {
+      const s = selSlide();
+      if (s) { s.pos = el.value; save(); for (const ed of [$("slide-editor"), $("fs-editor")]) if (ed) ed.className = ed.className.replace(/pos-\w+/, `pos-${s.pos}`); if (S.fs) drawFsText(); }
+      return;
+    }
     if (el.id === "file-video") { addVideoFiles(el.files, S.fileTarget); S.fileTarget = { kind: "clip" }; el.value = ""; }
-    if (el.id === "file-image") { addImageFiles(el.files); el.value = ""; }
+    if (el.id === "file-image") { addImageFiles(el.files, S.imgTarget); S.imgTarget = { kind: "opening" }; el.value = ""; }
   });
 
   document.addEventListener("click", async (e) => {
@@ -1052,7 +1301,7 @@
     const ins = selIns(), sl = selSlide();
     switch (a) {
       case "add-videos": S.fileTarget = { kind: "clip" }; $("file-video").click(); break;
-      case "add-images": $("file-image").click(); break;
+      case "add-images": S.imgTarget = { kind: "opening" }; $("file-image").click(); break;
       case "del-image": P.opening.images = P.opening.images.filter((im) => im.id !== id); delete runtime.images[id]; store.delBlob(id); VC.opening._cache = null; save(); renderPanel(); break;
       case "clear-images": {
         if (!confirm("モンタージュ画像を全て削除しますか？")) break;
@@ -1111,6 +1360,8 @@
         const x = insById(id);
         if (!x || !confirm(`${INS.label(x)} を削除しますか？`)) break;
         for (const v of INS.videoRefs(x)) { delete runtime.videos[v.id]; store.delBlob(v.id); }
+        for (const im of INS.imageRefs(x)) { delete runtime.images[im.id]; store.delBlob(im.id); }
+        if (S.fs && S.fs.insId === id) closeFs(true);
         P.inserts = P.inserts.filter((y) => y.id !== id);
         if (S.selIns === id) { S.selIns = null; S.selSlide = null; }
         if (S.modeIns === id) exitMode();
@@ -1126,6 +1377,7 @@
       case "slide-del": {
         if (!ins || !sl || ins.slides.length <= 1) break;
         if (sl.video) { delete runtime.videos[sl.video.id]; store.delBlob(sl.video.id); }
+        for (const im of sl.images || []) { delete runtime.images[im.id]; store.delBlob(im.id); }
         ins.slides = ins.slides.filter((x) => x.id !== sl.id);
         S.selSlide = ins.slides[0].id;
         if (S.modeSlide === sl.id) exitMode();
@@ -1148,6 +1400,44 @@
         save(); renderPanel(); renderTimeline(); break;
       }
       case "slide-edit-video": if (ins && sl) { enterMode("slide", ins.id, sl.id); renderPanel(); } break;
+
+      // slide: align / images
+      case "slide-align": if (sl) { sl.align = el.dataset.al; save(); if (S.fs) renderFs(); else renderPanel(); } break;
+      case "slide-img-add": if (ins && sl) { S.imgTarget = { kind: "slide", insId: ins.id, slideId: sl.id }; $("file-image").click(); } break;
+      case "slide-img-del": if (sl) { sl.images = sl.images.filter((x) => x.id !== id); delete runtime.images[id]; store.delBlob(id); save(); renderPanel(); } break;
+
+      // fullscreen slide editor
+      case "fs-open": if (ins && sl) openFs(ins.id, sl.id); break;
+      case "fs-close": closeFs(); break;
+      case "fs-crop": if (S.fs && S.fs.selImg) { S.fs.crop = !S.fs.crop; renderFs(); } break;
+      case "fs-preview": { if (!S.fs) break; const pid = S.fs.insId; closeFs(); previewIns(pid); break; }
+      case "fs-slide-select": if (S.fs) { S.fs.slideId = id; S.selSlide = id; S.fs.selImg = null; S.fs.crop = false; renderFs(); } break;
+      case "fs-slide-add": { if (!S.fs || !ins) break; const s = INS.newSlide(); ins.slides.push(s); S.fs.slideId = s.id; S.selSlide = s.id; S.fs.selImg = null; S.fs.crop = false; save(); renderFs(); renderTimeline(); break; }
+      case "fs-move": {
+        if (!S.fs || !ins || !sl) break;
+        const k = ins.slides.indexOf(sl), j = k + Number(el.dataset.d);
+        if (j < 0 || j >= ins.slides.length) break;
+        const t = ins.slides[j]; S.fs.slideId = t.id; S.selSlide = t.id; S.fs.selImg = null; S.fs.crop = false; renderFs(); break;
+      }
+      case "fs-slide-del": {
+        if (!S.fs || !ins || !sl || ins.slides.length <= 1) break;
+        if (!confirm("このスライドを削除しますか？")) break;
+        if (sl.video) { delete runtime.videos[sl.video.id]; store.delBlob(sl.video.id); }
+        for (const im of sl.images || []) { delete runtime.images[im.id]; store.delBlob(im.id); }
+        ins.slides = ins.slides.filter((x) => x.id !== sl.id);
+        S.fs.slideId = ins.slides[0].id; S.selSlide = S.fs.slideId; S.fs.selImg = null; S.fs.crop = false;
+        if (S.modeSlide === sl.id) exitMode();
+        save(); renderFs(); renderTimeline(); break;
+      }
+      case "fs-img-select": if (S.fs) { S.fs.selImg = id; S.fs.crop = false; renderFs(); } break;
+      case "fs-img-del": fsDeleteImage(id); break;
+      case "fs-img-order": {
+        if (!sl) break;
+        const k = sl.images.findIndex((x) => x.id === id), j = k + Number(el.dataset.d);
+        if (k === -1 || j < 0 || j >= sl.images.length) break;
+        [sl.images[k], sl.images[j]] = [sl.images[j], sl.images[k]];
+        save(); renderFs(); break;
+      }
 
       // montage videos
       case "mv-add": if (ins) { S.fileTarget = { kind: "montage", insId: ins.id }; $("file-video").click(); } break;
@@ -1221,6 +1511,11 @@
   document.addEventListener("keydown", (e) => {
     const tag = (e.target.tagName || "").toLowerCase();
     if (tag === "input" || tag === "textarea" || tag === "select" || e.target.isContentEditable) return;
+    if (S.fs) {
+      if (e.key === "Escape") { if (S.fs.crop) { S.fs.crop = false; renderFs(); } else closeFs(); return; }
+      if ((e.key === "Delete" || e.key === "Backspace") && S.fs.selImg) { e.preventDefault(); fsDeleteImage(S.fs.selImg); }
+      return;
+    }
     if (e.code === "Space") { e.preventDefault(); S.playing ? pause() : play(); }
     if (e.key === "ArrowLeft") setT(S.T - (e.shiftKey ? 5 : 1), { pause: true });
     if (e.key === "ArrowRight") setT(S.T + (e.shiftKey ? 5 : 1), { pause: true });
@@ -1239,7 +1534,7 @@
     if (!files.length) return;
     const imgs = files.filter((f) => /^image\//.test(f.type));
     const vids = files.filter((f) => !/^image\//.test(f.type));
-    if (imgs.length) addImageFiles(imgs);
+    if (imgs.length) addImageFiles(imgs, imageTarget());
     if (vids.length) {
       const ins = S.tab === "embed" ? selIns() : null;
       if (ins && ins.type === "montage") addVideoFiles(vids, { kind: "montage", insId: ins.id });
@@ -1247,10 +1542,11 @@
     }
   });
   document.addEventListener("paste", (e) => {
-    if (e.target && e.target.isContentEditable) return;
     const items = [...((e.clipboardData && e.clipboardData.items) || [])];
     const files = items.filter((it) => it.kind === "file" && /^image\//.test(it.type)).map((it) => it.getAsFile()).filter(Boolean);
-    if (files.length) { e.preventDefault(); addImageFiles(files); }
+    if (!files.length) return;
+    e.preventDefault();
+    addImageFiles(files, imageTarget());
   });
 
   // ---------- boot ----------
