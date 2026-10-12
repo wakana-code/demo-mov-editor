@@ -25,19 +25,26 @@ VC.render = {
     return { stingDur, openDur, opDur, segs, outDur, insLayout, mainDur, edDur, total: opDur + mainDur + edDur, srcTotal };
   },
   emptyInfo() { return { stingDur: 0, openDur: 0, opDur: 0, segs: [], outDur: 0, insLayout: [], mainDur: 0, edDur: 0, total: 0, srcTotal: 0 }; },
-  slideInfo(slide) {
-    const segs = VC.inserts.slideSegs(slide);
+  pageInfo(page) {
+    const segs = VC.inserts.pageSegs(page);
     const outDur = VC.timeline.outputDuration(segs);
-    return { stingDur: 0, openDur: 0, opDur: 0, segs, outDur, insLayout: [], mainDur: outDur, edDur: 0, total: VC.inserts.slideDuration(slide), srcTotal: slide.video ? slide.video.duration || 0 : 0 };
-  },
-  montageInfo(ins) {
-    const d = VC.inserts.montageDuration(ins);
-    return { stingDur: 0, openDur: 0, opDur: 0, segs: [], outDur: 0, insLayout: [], mainDur: d, edDur: 0, total: d, srcTotal: 0 };
+    return { stingDur: 0, openDur: 0, opDur: 0, segs, outDur, insLayout: [], mainDur: outDur, edDur: 0, total: VC.inserts.pageDuration(page), srcTotal: page.video ? page.video.duration || 0 : 0 };
   },
 
   // 「本編だけの出力時間（pure）」と「埋め込み込みの出力時間（out）」の変換
   pureToOut(info, pure) { let o = pure; for (const x of info.insLayout || []) if (x.base < pure) o += x.dur; return o; },
   outToPure(info, o) { let p = o; for (const x of info.insLayout || []) if (x.outEnd <= o) p -= x.dur; return p; },
+
+  // 再生中：本編の位置 pure に対応する出力時間。prevOut より前に終わった埋め込みだけを「通過済み」とみなし、
+  // 今まさに地点を越えた埋め込みがあれば、その入口（outStart）を返す（＝飛ばさずに埋め込みへ入る）
+  playingOut(info, pure, prevOut) {
+    let o = pure;
+    for (const x of info.insLayout || []) {
+      if (x.outEnd <= prevOut + 1e-3) { o += x.dur; continue; }   // 通過済み
+      if (x.base <= pure + 1e-6) return x.outStart;                 // 今越えた → 埋め込みへ
+    }
+    return o;
+  },
 
   firstMainClip(P, info) {
     const firstOut = info.segs.find((g) => !g.cut);
@@ -78,9 +85,9 @@ VC.render = {
     return { phase: "main", local: VC.timeline.srcToOut(info.segs, src), src, seg: seg && !seg.cut ? seg : null, clip: ca ? ca.clip : null, clipLocal: ca ? ca.local : 0, info, scrub: true };
   },
 
-  slideLocate(slide, T, info) {
-    const st = slide ? VC.inserts.slideVideoState(slide, T) : null;
-    return { phase: "main", local: T, slideT: T, seg: st ? st.seg : null, src: st ? st.src : 0, clip: slide && slide.video ? slide.video : null, clipLocal: st ? st.time : 0, info };
+  pageLocate(page, T, info) {
+    const st = page ? VC.inserts.pageVideoState(page, T) : null;
+    return { phase: "main", local: T, seg: st ? st.seg : null, src: st ? st.src : 0, clip: page && page.video ? page.video : null, clipLocal: st ? st.time : 0, info };
   },
 
   draw(ctx, W, H, loc, P, runtime) {

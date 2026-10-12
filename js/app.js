@@ -22,12 +22,11 @@
     drag: null, scrubSrc: null, pop: null, selectedRange: null,
     exporting: false, cancelExport: false, lastDown: 0, lastDownX: 0, mp4ok: null,
     picker: false,
-    mode: "project", modeIns: null, modeSlide: null,   // project | slide（スライドの動画を編集） | insert（埋め込み単体をプレビュー）
-    selIns: null, selSlide: null,                        // 埋め込みタブで選択中
-    place: null, placeAt: null,                          // 配置モード
+    mode: "project", modeIns: null,        // project | insert（埋め込み単体をメイン画面でプレビュー）
+    place: null, placeAt: null,
     fileTarget: { kind: "clip" },
-    imgTarget: { kind: "opening" },                      // 画像ファイルの追加先
-    fs: null,                                            // 全画面スライド編集 { insId, slideId, selImg, crop, drag }
+    imgTarget: { kind: "opening" },
+    fs: null,                              // 全画面スライドエディタ
   };
 
   function normalizeProject(saved) {
@@ -79,81 +78,7 @@
     wrap.classList.toggle("v", sz.h > sz.w);
     wrap.classList.toggle("sq", sz.h === sz.w);
   }
-
-  // ---------- mode / context ----------
-  function insById(id) { return P.inserts.find((x) => x.id === id) || null; }
-  function modeIns() { return S.mode === "project" ? null : insById(S.modeIns); }
-  function modeSlide() { const ins = modeIns(); return ins && S.mode === "slide" && ins.type === "slides" ? ins.slides.find((s) => s.id === S.modeSlide) || null : null; }
-  function selIns() { return insById(S.selIns); }
-  function selSlide() { const ins = selIns(); if (!ins || ins.type !== "slides") return null; return ins.slides.find((s) => s.id === S.selSlide) || ins.slides[0] || null; }
-  function ctxClips() {
-    if (S.mode === "slide") { const s = modeSlide(); return s && s.video ? [s.video] : []; }
-    if (S.mode === "insert") return [];
-    return P.clips;
-  }
-  function ctxRanges() {
-    if (S.mode === "slide") { const s = modeSlide(); return s ? s.ranges : []; }
-    if (S.mode === "insert") return [];
-    return P.ranges;
-  }
-  function insertInfo(ins) { const d = INS.duration(ins); return { stingDur: 0, openDur: 0, opDur: 0, segs: [], outDur: 0, insLayout: [], mainDur: d, edDur: 0, total: d, srcTotal: 0 }; }
-  function info() {
-    if (S.mode === "slide") { const s = modeSlide(); return s ? R.slideInfo(s) : R.emptyInfo(); }
-    if (S.mode === "insert") { const ins = modeIns(); return ins ? insertInfo(ins) : R.emptyInfo(); }
-    return R.info(P);
-  }
-  function locate(T, inf) {
-    inf = inf || info();
-    if (S.mode === "slide") return R.slideLocate(modeSlide(), T, inf);
-    if (S.mode === "insert") return { phase: "insert", ins: modeIns(), local: T, info: inf };
-    return R.locate(P, T, inf);
-  }
-  function toOutPlaying(inf, pure, curOut) {
-    let o = pure;
-    for (const x of inf.insLayout || []) if (x.base < pure || x.outEnd <= curOut + 1e-3) o += x.dur;
-    return o;
-  }
-  function enterMode(mode, insId, slideId) {
-    pause();
-    if (S.pop) closePopover();
-    S.mode = mode; S.modeIns = insId || null; S.modeSlide = slideId || null;
-    S.T = 0; S.scrubSrc = null; S.active = null;
-    renderTimeline(); renderModeBar(); setT(0, { pause: true });
-  }
-  function exitMode() {
-    if (S.mode === "project") return;
-    pause();
-    if (S.pop) closePopover();
-    S.mode = "project"; S.modeIns = null; S.modeSlide = null; S.active = null;
-    renderTimeline(); renderModeBar(); renderPanel(); setT(0, { pause: true });
-  }
-  function renderModeBar() {
-    const bar = $("place-bar");
-    const hint = $("tl-hint");
-    if (S.place) {
-      const ins = insById(S.place);
-      bar.classList.remove("hidden");
-      bar.innerHTML = `<b>📍 配置：${esc(ins ? INS.label(ins) : "")}</b><span>再生バーをクリックして位置を決めてください${S.placeAt != null ? `　→ <b>元 ${TL.fmtMs(S.placeAt)}</b> の直前に挿入` : ""}</span><span class="spacer"></span><button class="btn btn-sm" data-action="place-end">最後に</button><button class="btn btn-sm btn-primary" data-action="place-ok" ${S.placeAt == null ? "disabled" : ""}>✓ 決定</button><button class="btn btn-sm" data-action="place-cancel">キャンセル</button>`;
-      hint.innerHTML = `配置モード：クリックした位置の<b>直前</b>に埋め込まれます（本編は後ろにずれます）`;
-      return;
-    }
-    if (S.mode === "slide") {
-      const s = modeSlide(), ins = modeIns();
-      bar.classList.remove("hidden");
-      bar.innerHTML = `<b>✂ スライドの動画を編集中</b><span>${esc(ins ? INS.label(ins) : "")}　スライド ${ins ? ins.slides.indexOf(s) + 1 : ""}${s && s.video ? `　「${esc(s.video.name)}」` : "（動画なし）"}</span><span class="spacer"></span><button class="btn btn-sm btn-primary" data-action="mode-exit">← 本編に戻る</button>`;
-      hint.innerHTML = `この再生バーはスライドの動画です。いつも通り <b>ダブルクリック＋ドラッグ</b> で「字幕 / 倍速 / カット」ができます`;
-      return;
-    }
-    if (S.mode === "insert") {
-      const ins = modeIns();
-      bar.classList.remove("hidden");
-      bar.innerHTML = `<b>▶ 埋め込みをプレビュー中</b><span>${esc(ins ? INS.label(ins) : "")}</span><span class="spacer"></span><button class="btn btn-sm btn-primary" data-action="mode-exit">← 本編に戻る</button>`;
-      hint.innerHTML = `埋め込み単体のプレビューです（位置を決めると本編の中で再生されます）`;
-      return;
-    }
-    bar.classList.add("hidden"); bar.innerHTML = "";
-    hint.innerHTML = `クリック：その時点へ　｜　<b>ダブルクリックしてそのままドラッグ</b>：範囲を選んで「字幕 / 倍速 / カット」　｜　範囲をクリック：編集　｜　紫のマーカー：埋め込み`;
-  }
+  function deckById(id) { return P.inserts.find((x) => x.id === id) || null; }
 
   // ---------- project tabs ----------
   function renderProjTabs() {
@@ -168,9 +93,9 @@
     if (!next) return;
     pause();
     flushSave();
-    if (S.pop) closePopover();
     if (S.fs) closeFs(true);
-    S.mode = "project"; S.modeIns = null; S.modeSlide = null; S.place = null; S.selIns = null; S.selSlide = null;
+    if (S.pop) closePopover();
+    S.mode = "project"; S.modeIns = null; S.place = null;
     P = normalizeProject(next);
     store.setCurrentId(P.id);
     S.T = 0; S.active = null; S.scrubSrc = null; S.selectedRange = null;
@@ -257,37 +182,24 @@
         return true;
       } catch (e) { console.warn(e); return false; }
     };
+    const loadImg = async (im) => {
+      if (runtime.images[im.id]) return true;
+      try { const b = await store.getBlob(im.id); if (!b) return false; runtime.images[im.id] = await loadImageEl(b); return true; } catch (e) { console.warn(e); return false; }
+    };
     let changed = false;
     const keepClips = [];
     for (const c of P.clips) { if (await loadRef(c)) keepClips.push(c); }
     if (keepClips.length !== P.clips.length) { P.ranges = TL.remapRanges(P.ranges, P.clips, keepClips); P.clips = keepClips; changed = true; }
-    for (const ins of P.inserts) {
-      if (ins.type === "montage") {
+    for (const deck of P.inserts) {
+      for (const pg of deck.pages) {
+        if (pg.video && !(await loadRef(pg.video))) { pg.video = null; pg.ranges = []; changed = true; }
         const keep = [];
-        for (const v of ins.videos) { if (await loadRef(v)) keep.push(v); }
-        if (keep.length !== ins.videos.length) { ins.videos = keep; changed = true; }
-      } else {
-        for (const s of ins.slides) {
-          if (s.video && !(await loadRef(s.video))) { s.video = null; s.ranges = []; changed = true; }
-          const keep = [];
-          for (const im of s.images || []) {
-            if (runtime.images[im.id]) { keep.push(im); continue; }
-            try { const b = await store.getBlob(im.id); if (!b) continue; runtime.images[im.id] = await loadImageEl(b); keep.push(im); } catch (e) { console.warn(e); }
-          }
-          if (keep.length !== (s.images || []).length) { s.images = keep; changed = true; }
-        }
+        for (const im of pg.images) { if (await loadImg(im)) keep.push(im); }
+        if (keep.length !== pg.images.length) { pg.images = keep; changed = true; }
       }
     }
     const keepImgs = [];
-    for (const im of P.opening.images) {
-      if (runtime.images[im.id]) { keepImgs.push(im); continue; }
-      try {
-        const b = await store.getBlob(im.id);
-        if (!b) continue;
-        runtime.images[im.id] = await loadImageEl(b);
-        keepImgs.push(im);
-      } catch (e) { console.warn(e); }
-    }
+    for (const im of P.opening.images) { if (await loadImg(im)) keepImgs.push(im); }
     if (keepImgs.length !== P.opening.images.length) { P.opening.images = keepImgs; changed = true; }
     if (changed) save();
   }
@@ -300,11 +212,12 @@
         await store.putBlob(id, f);
         const v = await loadVideoEl(f);
         runtime.videos[id] = v;
-        out.push({ id, name: f.name.replace(/\.[^.]+$/, ""), duration: v.duration, width: v.videoWidth, height: v.videoHeight });
+        out.push({ id, name: f.name.replace(/\.[^.]+$/, ""), duration: v.duration, width: v.videoWidth, height: v.videoHeight, start: 0, end: null });
       } catch (e) { toast(`${f.name}: ${e.message}`); }
     }
     return out;
   }
+  // target: {kind:"clip"} | {kind:"page", deckId, pageId} | {kind:"montage-new", deckId} | {kind:"montage-add", deckId, gid}
   async function addVideoFiles(files, target) {
     target = target || { kind: "clip" };
     const list = await importVideoFiles(files);
@@ -316,19 +229,32 @@
       renderTimeline();
       return;
     }
-    const ins = insById(target.insId);
-    if (!ins) return;
-    if (target.kind === "montage") {
-      for (const c of list) ins.videos.push(Object.assign(c, { start: 0, end: null }));
+    const deck = deckById(target.deckId);
+    if (!deck) return;
+    if (target.kind === "page") {
+      const pg = deck.pages.find((x) => x.id === target.pageId);
+      if (!pg) return;
+      if (pg.video) { delete runtime.videos[pg.video.id]; store.delBlob(pg.video.id); }
+      pg.video = list[0]; pg.ranges = [];
+      toast(`ページに「${list[0].name}」を載せました`);
+    } else if (target.kind === "montage-new") {
+      const gid = store.uid("g");
+      deck.groups[gid] = INS.newGroup();
+      const cur = S.fs ? deck.pages.findIndex((x) => x.id === S.fs.pageId) : deck.pages.length - 1;
+      const pages = list.map((v) => Object.assign(INS.newPage("montage"), { video: v, group: gid }));
+      deck.pages.splice(cur + 1, 0, ...pages);
+      if (S.fs) S.fs.pageId = pages[0].id;
+      toast(`モンタージュ（${list.length}本）を追加しました`);
+    } else if (target.kind === "montage-add") {
+      const idx = deck.pages.map((x, i) => (x.group === target.gid ? i : -1)).filter((i) => i >= 0).pop();
+      const pages = list.map((v) => Object.assign(INS.newPage("montage"), { video: v, group: target.gid }));
+      deck.pages.splice((idx == null ? deck.pages.length - 1 : idx) + 1, 0, ...pages);
       toast(`モンタージュに${list.length}本追加しました`);
-    } else {
-      const s = ins.slides.find((x) => x.id === target.slideId);
-      if (!s) return;
-      s.video = Object.assign(list[0], { start: 0 }); s.ranges = [];
-      toast(`スライドに「${list[0].name}」を載せました`);
     }
     R.snaps = {};
-    save(); renderPanel(); renderTimeline(); updateHUD();
+    save();
+    if (S.fs) renderFs(); else renderPanel();
+    renderTimeline();
   }
   async function addImageFiles(files, target) {
     target = target || { kind: "opening" };
@@ -344,20 +270,20 @@
       } catch (e) { toast(e.message); }
     }
     if (!loaded.length) return;
-    if (target.kind === "slide") {
-      const ins = insById(target.insId);
-      const s = ins && ins.type === "slides" ? ins.slides.find((x) => x.id === target.slideId) : null;
-      if (!s) { for (const l of loaded) { delete runtime.images[l.id]; store.delBlob(l.id); } return; }
+    if (target.kind === "page") {
+      const deck = deckById(target.deckId);
+      const pg = deck ? deck.pages.find((x) => x.id === target.pageId) : null;
+      if (!pg) { for (const l of loaded) { delete runtime.images[l.id]; store.delBlob(l.id); } return; }
       const sz = sizeOf();
       for (const l of loaded) {
         const img = runtime.images[l.id];
         const im = INS.newImage(l.id, l.name, img.naturalWidth, img.naturalHeight, sz.w, sz.h);
-        im.x += (s.images.length % 5) * 0.03; im.y += (s.images.length % 5) * 0.03;
-        s.images.push(im);
+        im.x += (pg.images.length % 5) * 0.03; im.y += (pg.images.length % 5) * 0.03;
+        pg.images.push(im);
       }
       save();
-      if (S.fs) { S.fs.selImg = loaded[loaded.length - 1].id; S.fs.crop = false; renderFs(); } else renderPanel();
-      toast(`スライドに画像を${loaded.length}枚追加しました`);
+      if (S.fs) { S.fs.selImg = loaded[loaded.length - 1].id; S.fs.crop = false; renderFs(); }
+      toast(`ページに画像を${loaded.length}枚追加しました`);
       return;
     }
     P.opening.images.push(...loaded);
@@ -365,8 +291,71 @@
     save(); renderPanel();
     toast(`画像を${loaded.length}枚追加しました`);
   }
+  function imageTarget() {
+    if (S.fs) { const pg = fsPage(); if (pg) return { kind: "page", deckId: S.fs.deckId, pageId: pg.id }; }
+    return { kind: "opening" };
+  }
 
-  // ---------- playback ----------
+  // ---------- mode / context（メイン画面） ----------
+  function modeIns() { return S.mode === "insert" ? deckById(S.modeIns) : null; }
+  function ctxClips() {
+    if (S.fs) { const pg = fsPage(); return pg && pg.video ? [pg.video] : []; }
+    if (S.mode === "insert") return [];
+    return P.clips;
+  }
+  function ctxRanges() {
+    if (S.fs) { const pg = fsPage(); return pg && pg.kind !== "montage" ? pg.ranges : []; }
+    if (S.mode === "insert") return [];
+    return P.ranges;
+  }
+  function tlPre() { return S.fs ? "fstl" : "tl"; }
+  function insertInfo(deck) { const d = INS.duration(deck); return { stingDur: 0, openDur: 0, opDur: 0, segs: [], outDur: 0, insLayout: [], mainDur: d, edDur: 0, total: d, srcTotal: 0 }; }
+  function info() {
+    if (S.fs) { const pg = fsPage(); return pg ? R.pageInfo(pg) : R.emptyInfo(); }
+    if (S.mode === "insert") { const d = modeIns(); return d ? insertInfo(d) : R.emptyInfo(); }
+    return R.info(P);
+  }
+  function locate(T, inf) {
+    inf = inf || info();
+    if (S.mode === "insert") return { phase: "insert", ins: modeIns(), local: T, info: inf };
+    return R.locate(P, T, inf);
+  }
+  function enterMode(mode, insId) {
+    pause();
+    if (S.pop) closePopover();
+    S.mode = mode; S.modeIns = insId || null;
+    S.T = 0; S.scrubSrc = null; S.active = null;
+    renderTimeline(); renderModeBar(); setT(0, { pause: true });
+  }
+  function exitMode() {
+    if (S.mode === "project") return;
+    pause();
+    if (S.pop) closePopover();
+    S.mode = "project"; S.modeIns = null; S.active = null;
+    renderTimeline(); renderModeBar(); renderPanel(); setT(0, { pause: true });
+  }
+  function renderModeBar() {
+    const bar = $("place-bar");
+    const hint = $("tl-hint");
+    if (S.place) {
+      const d = deckById(S.place);
+      bar.classList.remove("hidden");
+      bar.innerHTML = `<b>📍 配置：${esc(d ? INS.label(d) : "")}</b><span>再生バーをクリックして位置を決めてください${S.placeAt != null ? `　→ <b>元 ${TL.fmtMs(S.placeAt)}</b> の直前に挿入` : ""}</span><span class="spacer"></span><button class="btn btn-sm" data-action="place-end">最後に</button><button class="btn btn-sm btn-primary" data-action="place-ok" ${S.placeAt == null ? "disabled" : ""}>✓ 決定</button><button class="btn btn-sm" data-action="place-cancel">キャンセル</button>`;
+      hint.innerHTML = `配置モード：クリックした位置の<b>直前</b>に埋め込まれます（本編は後ろにずれます）`;
+      return;
+    }
+    if (S.mode === "insert") {
+      const d = modeIns();
+      bar.classList.remove("hidden");
+      bar.innerHTML = `<b>▶ 埋め込みをプレビュー中</b><span>${esc(d ? INS.label(d) : "")}</span><span class="spacer"></span><button class="btn btn-sm" data-action="ins-open" data-id="${d ? d.id : ""}">⛶ 編集</button><button class="btn btn-sm btn-primary" data-action="mode-exit">← 本編に戻る</button>`;
+      hint.innerHTML = `埋め込み単体のプレビューです（位置を決めると本編の中で再生されます）`;
+      return;
+    }
+    bar.classList.add("hidden"); bar.innerHTML = "";
+    hint.innerHTML = `クリック：その時点へ　｜　<b>ダブルクリックしてそのままドラッグ</b>：範囲を選んで「字幕 / 倍速 / カット」　｜　範囲をクリック：編集　｜　紫のマーカー：埋め込み`;
+  }
+
+  // ---------- playback（メイン） ----------
   function setT(t, opts) {
     opts = opts || {};
     const inf = info();
@@ -431,12 +420,12 @@
     $("btn-play").textContent = "▶";
     if (S.active) { try { S.active.pause(); } catch (e) {} }
   }
-
   function tick(now) {
     requestAnimationFrame(tick);
     if (S.exporting || S.picker) return;
     const dt = Math.min(0.1, (now - (S.lastTick || now)) / 1000);
     S.lastTick = now;
+    if (S.fs) { fsTick(dt); return; }
     const inf = info();
     let loc = locate(S.T, inf);
     if (S.playing) {
@@ -449,7 +438,7 @@
         let pure = null;
         if (vid.ended || vsrc >= loc.seg.end - 0.02) pure = loc.seg.outEnd + 0.001;
         else if (vsrc >= loc.seg.start - 0.05) pure = loc.seg.outStart + (Math.max(loc.seg.start, vsrc) - loc.seg.start) / loc.seg.rate;
-        if (pure != null) S.T = inf.opDur + toOutPlaying(inf, pure, S.T - inf.opDur);
+        if (pure != null) S.T = inf.opDur + R.playingOut(inf, pure, S.T - inf.opDur);
         else S.T += dt;
         if (S.T >= inf.opDur + inf.mainDur) S.T = inf.opDur + inf.mainDur;
       } else if (loc.phase === "insert") {
@@ -463,40 +452,24 @@
       loc = locate(S.T, inf);
       if (loc.phase === "main" || loc.phase === "insert") syncVideoToT(false);
     }
-    drawFrame(loc, inf);
+    const W = canvas.width, H = canvas.height;
+    if (S.mode === "insert") { const d = modeIns(); if (d) INS.draw(ctx, W, H, d, S.T, P, runtime); }
+    else { const drawLoc = (S.scrubSrc != null && !S.playing) ? R.locateSrc(P, S.scrubSrc, inf) : loc; R.draw(ctx, W, H, drawLoc, P, runtime); }
     updateHUD(inf, loc);
   }
-  function drawFrame(loc, inf) {
-    const W = canvas.width, H = canvas.height;
-    if (S.mode === "slide") {
-      const s = modeSlide();
-      if (!s) { ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H); return; }
-      if (S.scrubSrc != null && !S.playing && s.video) {
-        const v = runtime.videos[s.video.id];
-        ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
-        if (v && v.videoWidth) R.drawVideo(ctx, W, H, v);
-        for (const c of TL.captionsAt(s.ranges, S.scrubSrc)) R.drawCaption(ctx, W, H, c, S.scrubSrc);
-        return;
-      }
-      INS.drawSlide(ctx, W, H, s, S.T, P, runtime);
-      return;
-    }
-    if (S.mode === "insert") { const ins = modeIns(); if (ins) INS.draw(ctx, W, H, ins, S.T, P, runtime); return; }
-    const drawLoc = (S.scrubSrc != null && !S.playing) ? R.locateSrc(P, S.scrubSrc, inf) : loc;
-    R.draw(ctx, W, H, drawLoc, P, runtime);
-  }
 
-  // ---------- HUD / timeline ----------
+  // ---------- HUD / timeline（共通描画） ----------
   function updateHUD(inf, loc) {
+    if (S.fs) return;
     inf = inf || info();
     loc = loc || locate(S.T, inf);
     $("time-label").textContent = `${TL.fmt(S.T)} / ${TL.fmt(inf.total)}`;
     const ph = $("phase-label");
     let src = 0;
-    if (loc.phase === "opening") { ph.textContent = "🎞 オープニング"; src = 0; }
-    else if (loc.phase === "sting") { ph.textContent = "🏷 タイトル"; src = 0; }
+    if (loc.phase === "opening") { ph.textContent = "🎞 オープニング"; }
+    else if (loc.phase === "sting") { ph.textContent = "🏷 タイトル"; }
     else if (loc.phase === "ending") { ph.textContent = "🔚 エンディング"; src = inf.srcTotal; }
-    else if (loc.phase === "insert") { ph.textContent = `🧩 ${loc.ins ? INS.label(loc.ins) : "埋め込み"}`; src = loc.ins && loc.ins.at != null ? loc.ins.at : 0; }
+    else if (loc.phase === "insert") { ph.textContent = `${loc.ins ? INS.label(loc.ins) : "埋め込み"}`; src = loc.ins && loc.ins.at != null ? loc.ins.at : 0; }
     else {
       src = S.scrubSrc != null && !S.playing ? S.scrubSrc : loc.src;
       const bits = [`📹 ${loc.clip ? loc.clip.name : ""}`, `元 ${TL.fmtMs(src)}`];
@@ -512,47 +485,98 @@
     $("tl-playhead").style.left = `calc(${Math.max(0, Math.min(100, pct))}% - 1px)`;
     $("stage-empty").classList.toggle("hidden", S.mode !== "project" || P.clips.length > 0 || P.opening.enabled || P.ending.enabled);
   }
-
-  function renderTimeline() {
-    const inf = info();
-    const clips = ctxClips(), ranges = ctxRanges();
-    const total = inf.srcTotal || 1;
-    if (S.mode === "insert") $("tl-clips").innerHTML = `<div class="tl-clip" style="width:100%;align-items:center;justify-content:center;font-size:11px">埋め込みのプレビュー中（本編に戻るには右上の「← 本編に戻る」）</div>`;
-    else if (S.mode === "slide" && !clips.length) $("tl-clips").innerHTML = `<div class="tl-clip" style="width:100%;align-items:center;justify-content:center;font-size:11px">このスライドには動画がありません（埋め込みタブで「＋ 動画を載せる」）</div>`;
-    else $("tl-clips").innerHTML = clips.map((c) => `<div class="tl-clip" style="width:${(c.duration / total) * 100}%" title="${esc(c.name)}（${TL.fmt(c.duration)}）">${esc(c.name)}</div>`).join("");
-    $("tl-ranges").innerHTML = ranges.map((r) => {
+  function rangeBarHtml(ranges, total) {
+    return ranges.map((r) => {
       const l = (r.start / total) * 100, w = Math.max(0.3, ((r.end - r.start) / total) * 100);
       const label = r.type === "caption" ? `💬 ${r.text || ""}` : r.type === "speed" ? `×${r.rate}` : `✂ ${cutFxLabel(r)}`;
       return `<div class="tl-range ${r.type} ${S.selectedRange === r.id ? "selected" : ""}" data-id="${r.id}" style="left:${l}%;width:${w}%" title="${esc(label)}">${esc(label)}</div>`;
     }).join("");
-    $("tl-inserts").innerHTML = S.mode === "project" ? P.inserts.filter((x) => x.at != null).map((x) =>
-      `<div class="tl-ins ${S.selIns === x.id ? "selected" : ""}" data-action="ins-marker" data-id="${x.id}" style="left:${(Math.min(x.at, inf.srcTotal) / total) * 100}%" title="${esc(INS.label(x))}（${INS.duration(x).toFixed(1)}秒）">${x.type === "montage" ? "🎞" : "💬"}</div>`).join("") : "";
-    $("range-list").innerHTML = ranges.length ? ranges.slice().sort((a, b) => a.start - b.start).map((r) => {
+  }
+  function rangeListHtml(ranges) {
+    return ranges.slice().sort((a, b) => a.start - b.start).map((r) => {
       const chip = r.type === "caption" ? `<span class="chip chip-cap">字幕</span>` : r.type === "speed" ? `<span class="chip chip-speed">×${r.rate}</span>` : `<span class="chip chip-cut">カット</span>`;
       const d = r.type === "caption" ? r.text : r.type === "speed" ? `${r.rate}倍速` : `この区間を飛ばす（演出: ${cutFxLabel(r)}）`;
       return `<div class="range-item"><span class="t">${TL.fmtMs(r.start)} – ${TL.fmtMs(r.end)}</span>${chip}<span class="d">${esc(d)}</span><button class="btn btn-sm" data-action="range-jump" data-id="${r.id}">▶</button><button class="btn btn-sm" data-action="range-edit" data-id="${r.id}">編集</button><button class="btn btn-sm btn-danger" data-action="range-del" data-id="${r.id}">✕</button></div>`;
-    }).join("") : "";
+    }).join("");
+  }
+  function renderTimeline() {
+    if (S.fs) { renderFsTimeline(); return; }
+    const inf = info();
+    const clips = ctxClips(), ranges = ctxRanges();
+    const total = inf.srcTotal || 1;
+    if (S.mode === "insert") $("tl-clips").innerHTML = `<div class="tl-clip" style="width:100%;align-items:center;justify-content:center;font-size:11px">埋め込みのプレビュー中（「← 本編に戻る」で戻ります）</div>`;
+    else $("tl-clips").innerHTML = clips.map((c) => `<div class="tl-clip" style="width:${(c.duration / total) * 100}%" title="${esc(c.name)}（${TL.fmt(c.duration)}）">${esc(c.name)}</div>`).join("");
+    $("tl-ranges").innerHTML = rangeBarHtml(ranges, total);
+    $("tl-inserts").innerHTML = S.mode === "project" ? P.inserts.filter((x) => x.at != null).map((x) =>
+      `<div class="tl-ins ${S.place === x.id ? "selected" : ""}" data-action="ins-marker" data-id="${x.id}" style="left:${(Math.min(x.at, inf.srcTotal) / total) * 100}%" title="${esc(INS.label(x))}（${INS.duration(x).toFixed(1)}秒）">🧩</div>`).join("") : "";
+    $("range-list").innerHTML = rangeListHtml(ranges);
+    const placed = S.mode === "project" ? P.inserts.filter((x) => x.at != null).sort((a, b) => a.at - b.at) : [];
+    $("insert-list").innerHTML = placed.map((x) => `<div class="range-item"><span class="t">元 ${TL.fmtMs(x.at)} の直前</span><span class="chip" style="background:#c4b5fd;color:#111">埋め込み</span><span class="d">${esc(INS.label(x))}　${INS.duration(x).toFixed(1)}秒</span><button class="btn btn-sm" data-action="ins-preview" data-id="${x.id}">▶</button><button class="btn btn-sm" data-action="ins-open" data-id="${x.id}">編集</button><button class="btn btn-sm" data-action="ins-place" data-id="${x.id}">📍</button><button class="btn btn-sm btn-danger" data-action="ins-unplace" data-id="${x.id}">外す</button></div>`).join("");
     const ghost = $("tl-ghost");
     if (S.place && S.placeAt != null) { ghost.classList.remove("hidden"); ghost.style.left = `${(Math.min(S.placeAt, inf.srcTotal) / total) * 100}%`; }
     else ghost.classList.add("hidden");
     updateHUD(inf);
   }
   function posToSrc(e) {
-    const rect = $("tl-track").getBoundingClientRect();
+    const rect = $(`${tlPre()}-track`).getBoundingClientRect();
     const f = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     return f * info().srcTotal;
   }
   function showSelection(a, b) {
     const total = info().srcTotal || 1;
-    const el = $("tl-selection");
+    const el = $(`${tlPre()}-selection`);
+    if (!el) return;
     if (a == null) { el.classList.add("hidden"); return; }
     const l = Math.min(a, b), r = Math.max(a, b);
     el.classList.remove("hidden");
     el.style.left = `${(l / total) * 100}%`;
     el.style.width = `${((r - l) / total) * 100}%`;
   }
+  function doSeek(src) { if (S.fs) fsSeekSrc(src); else seekSrc(src); }
+  function bindTrack(track) {
+    track.addEventListener("pointerdown", (e) => {
+      if (e.target.closest(".tl-range") || e.target.closest(".tl-ins")) return;
+      if (!S.fs && S.mode === "insert") return;
+      if (!ctxClips().length) { toast(S.fs ? "このページには動画がありません" : "まずクリップを追加してください"); return; }
+      const s = posToSrc(e);
+      if (!S.fs && S.place) { S.placeAt = s; seekSrc(s); renderModeBar(); renderTimeline(); return; }
+      const now = performance.now();
+      const dbl = now - S.lastDown < 400 && Math.abs(e.clientX - S.lastDownX) < 10;
+      S.lastDown = now; S.lastDownX = e.clientX;
+      track.setPointerCapture(e.pointerId);
+      S.drag = dbl ? { mode: "select", a: s, b: s } : { mode: "scrub" };
+      if (dbl) { if (S.pop) closePopover(); showSelection(s, s); }
+      doSeek(s);
+    });
+    track.addEventListener("pointermove", (e) => {
+      if (!S.drag) return;
+      const s = posToSrc(e);
+      if (S.drag.mode === "select") { S.drag.b = s; showSelection(S.drag.a, s); }
+      doSeek(s);
+    });
+    const endDrag = () => {
+      if (!S.drag) return;
+      const d = S.drag; S.drag = null;
+      if (d.mode !== "select") return;
+      const a = Math.min(d.a, d.b), b = Math.max(d.a, d.b);
+      if (b - a < 0.15) { showSelection(null); toast("ダブルクリックしたまま横にドラッグして範囲を選びます"); return; }
+      const pg = S.fs ? fsPage() : null;
+      if (pg && pg.kind === "montage") { pg.video.start = a; pg.video.end = b; showSelection(null); save(); renderFsTimeline(); renderFsPages(); toast(`使う範囲：${TL.fmtMs(a)} – ${TL.fmtMs(b)}`); return; }
+      openPopover({ id: store.uid("r"), type: null, start: a, end: b }, true);
+    };
+    track.addEventListener("pointerup", endDrag);
+    track.addEventListener("pointercancel", endDrag);
+    track.addEventListener("pointerdown", (e) => {
+      const el = e.target.closest(".tl-range");
+      if (!el) return;
+      e.stopPropagation();
+      const r = ctxRanges().find((x) => x.id === el.dataset.id);
+      if (r) { doSeek(r.start); openPopover(r, false); }
+    }, true);
+  }
 
-  // ---------- range popover ----------
+  // ---------- range popover（メイン／全画面 共通） ----------
+  function popEl() { return S.fs ? $("fs-popover") : $("range-popover"); }
   function openPopover(range, isNew) {
     S.pop = { r: Object.assign({}, range), isNew };
     S.selectedRange = range.id;
@@ -562,16 +586,17 @@
   }
   function closePopover() {
     S.pop = null; S.selectedRange = null;
-    $("range-popover").classList.add("hidden");
+    const el = popEl(); if (el) el.classList.add("hidden");
     showSelection(null);
     renderTimeline();
   }
   function renderPopover() {
-    const pop = $("range-popover");
+    const pop = popEl();
     const { r, isNew } = S.pop;
     pop.classList.remove("hidden");
-    const rect = $("timeline").getBoundingClientRect(), st = $("stage").getBoundingClientRect();
-    pop.style.top = `${rect.bottom - st.top + 28}px`;
+    const tl = $(S.fs ? "fstl" : "timeline"), base = $(S.fs ? "fs-center" : "stage");
+    const rect = tl.getBoundingClientRect(), st = base.getBoundingClientRect();
+    pop.style.top = `${rect.bottom - st.top + base.scrollTop + 28}px`;
     pop.style.left = `${Math.max(0, Math.min(st.width - 430, rect.left - st.left + 46))}px`;
     const head = `<h4>${isNew ? "この範囲に" : "範囲を編集"} <span class="small">${TL.fmtMs(r.start)} – ${TL.fmtMs(r.end)}（${(r.end - r.start).toFixed(1)}秒）</span><span class="spacer"></span><button class="btn btn-sm" data-action="pop-close">✕</button></h4>`;
     if (!r.type) {
@@ -600,8 +625,7 @@
             <option value="zoom" ${cur === "zoom" ? "selected" : ""}>パンチズーム</option>
             <option value="glitch" ${cur === "glitch" ? "selected" : ""}>グリッチ</option>
             <option value="none" ${cur === "none" ? "selected" : ""}>なし（シームレスに繋ぐ）</option>
-          </select></div>
-        <div class="small">演出の長さはクリップタブの「カットの演出 → 長さ」が共通で使われます。</div>`;
+          </select></div>`;
     }
     pop.innerHTML = head + body + `<div class="row" style="margin-top:10px">
         ${isNew ? `<button class="btn btn-sm" data-action="pop-back">← 種類を選び直す</button>` : `<button class="btn btn-sm btn-danger" data-action="pop-delete">削除</button>`}
@@ -627,8 +651,15 @@
     R.snaps = {};
     save();
     closePopover();
-    if (S.mode === "slide") renderPanel();
+    if (S.fs) renderFsPages();
     toast(isNew ? "範囲を追加しました" : "範囲を更新しました");
+  }
+  function deleteRange(id) {
+    const rs = ctxRanges();
+    const k = rs.findIndex((x) => x.id === id);
+    if (k !== -1) rs.splice(k, 1);
+    R.snaps = {}; save(); renderTimeline();
+    if (S.fs) renderFsPages();
   }
 
   // ---------- side panel ----------
@@ -641,7 +672,7 @@
     const el = $("panel");
     if (S.tab === "opening") el.innerHTML = panelOpening();
     else if (S.tab === "clips") el.innerHTML = panelClips();
-    else if (S.tab === "embed") { el.innerHTML = panelEmbed(); drawMontageThumbs(); }
+    else if (S.tab === "embed") el.innerHTML = panelEmbed();
     else if (S.tab === "ending") el.innerHTML = panelEnding();
     else el.innerHTML = panelExport();
   }
@@ -690,8 +721,7 @@
           <div class="small">タイプ → じわっと左に流れる → 一瞬で左に退場 → 次の文章、の順に出ます</div></div>
         <div class="grid3">${num("1文字の速さ", "opening.charDur", o.charDur, 0.02, 0.15, 0.005, "秒")}${num("じわっと流れる時間", "opening.holdDur", o.holdDur, 0.3, 2.5, 0.05, "秒")}${num("退場の速さ", "opening.exitDur", o.exitDur, 0.1, 0.6, 0.02, "秒")}</div>
         ${montageBlock(o)}
-        ${num("最後の1枚で止める時間", "opening.lastHold", o.lastHold, 0, 2, 0.05, "秒")}
-        <div class="note">モンタージュの最後の1枚で一瞬止まってから、本編に切り替わります。</div>`;
+        ${num("最後の1枚で止める時間", "opening.lastHold", o.lastHold, 0, 2, 0.05, "秒")}`;
     }
     return head + `
       <div class="field"><label>最初に1文字ずつ出す単語（スペース区切り）</label><input type="text" data-bind="opening.words" value="${esc(o.words.join(" "))}" placeholder="you can now"></div>
@@ -701,8 +731,7 @@
       <div class="field"><label>用途（最後にドーンと出す文章）</label><textarea data-bind="opening.purpose" placeholder="例：edit documents / 計画書を貼るだけでタスクに分解">${esc(o.purpose)}</textarea>
         <div class="small">${VC.opening.phrases(o.purpose).length ? `長いので ${VC.opening.phrases(o.purpose).length} フレーズに分けて出してから全文を表示します` : "短いのでそのままドーンと表示します"}</div></div>
       <div class="grid2">${num("1フレーズの時間", "opening.phraseDur", o.phraseDur, 0.2, 1.5, 0.05, "秒")}${num("全文の表示時間", "opening.finalHold", o.finalHold, 0.5, 4, 0.1, "秒")}</div>
-      ${num("本編へのズームイン（パンチズーム）", "opening.transDur", o.transDur, 0, 1.2, 0.05, "秒")}
-      <div class="note">用途の文字に一気にズームイン → 文字を突き抜けた先に本編の映像が現れます。0 にするとただの切り替えになります。</div>`;
+      ${num("本編へのズームイン（パンチズーム）", "opening.transDur", o.transDur, 0, 1.2, 0.05, "秒")}`;
   }
   function panelClips() {
     const total = TL.totalSource(P.clips);
@@ -728,7 +757,7 @@
         ${num("長さ", "cutFx.dur", P.cutFx.dur, 0.1, 0.8, 0.05, "秒")}
       </div>
       <div class="note">ここは「既定」の演出です。カットごとに変えたいときは、再生バーのカット範囲をクリック → 「切り替わりの演出」で個別に選べます。</div>
-      <div class="note">再生できない場合（HEVC収録など）は、QuickTime Player で「ファイル → 書き出す → 1080p」してから追加してください。Macの画面収録は標準で無音です。</div>`;
+      <div class="note">再生できない場合（HEVC収録など）は、QuickTime Player で「ファイル → 書き出す → 1080p」してから追加してください。</div>`;
   }
   function panelEnding() {
     const e = P.ending;
@@ -744,130 +773,46 @@
       ${tw ? "" : `<div class="field"><label>サブテキスト（任意）</label><input type="text" data-bind="ending.sub" value="${esc(e.sub)}" placeholder="例：計画書を貼るだけ。段取りは、AIの上司がやる。"></div>`}
       <div class="grid2">${num("アプリ名の1文字の速さ", "ending.charDur", e.charDur, 0.03, 0.25, 0.01, "秒")}${num("表示したままの時間", "ending.hold", e.hold, 0.5, 5, 0.1, "秒")}</div>`;
   }
-
-  // ---------- 埋め込みタブ ----------
   function panelEmbed() {
-    const ins = selIns();
-    const list = P.inserts.map((x) => `
-      <div class="ins-item" style="${S.selIns === x.id ? "border-color:var(--primary)" : ""}">
+    return `
+      <h3>🧩 埋め込み <span class="small">${P.inserts.length}個</span></h3>
+      <div class="row"><button class="btn btn-sm btn-primary" data-action="ins-new">＋ 新しい埋め込みを作る（全画面エディタ）</button></div>
+      ${P.inserts.length ? P.inserts.map((x) => `
+      <div class="ins-item">
         <span class="n">${esc(INS.label(x))}</span>
         <span class="small">${x.at != null ? `📍 元 ${TL.fmtMs(x.at)}` : "未配置"}　${INS.duration(x).toFixed(1)}秒</span>
-        <button class="btn btn-sm ${S.selIns === x.id ? "btn-primary" : ""}" data-action="ins-select" data-id="${x.id}">編集</button>
+        <button class="btn btn-sm btn-primary" data-action="ins-open" data-id="${x.id}">⛶ 開く</button>
         <button class="btn btn-sm" data-action="ins-preview" data-id="${x.id}">▶</button>
         <button class="btn btn-sm" data-action="ins-place" data-id="${x.id}">📍</button>
         <button class="btn btn-sm btn-danger" data-action="ins-del" data-id="${x.id}">✕</button>
-      </div>`).join("");
-    return `
-      <h3>🧩 埋め込み <span class="small">${P.inserts.length}個</span></h3>
-      <div class="row"><button class="btn btn-sm btn-primary" data-action="ins-new-slides">＋ スライド（文字 / 動画）</button><button class="btn btn-sm btn-primary" data-action="ins-new-montage">＋ 動画モンタージュ</button></div>
-      ${list || `<div class="note">文字のスライドや、複数動画のモンタージュを作って、本編の好きな位置に埋め込めます。作ったら「📍」で再生バーの位置をクリック → 決定。</div>`}
-      ${ins ? (ins.type === "montage" ? montageEditor(ins) : slidesEditor(ins)) : ""}`;
+      </div>`).join("") : `<div class="note">文字・画像・動画のページや、複数動画のモンタージュを全画面エディタで作り、本編の好きな位置に埋め込めます。「📍」で再生バーの位置をクリック → 決定。</div>`}`;
   }
-  function slidesEditor(ins) {
-    const s = selSlide();
-    if (!s) return "";
-    const idx = ins.slides.indexOf(s);
-    const colors = INS.colorsOf(s, P);
+  function panelExport() {
+    const inf = R.info(P);
     const sz = sizeOf();
-    const cls = sz.h > sz.w ? "v" : sz.h === sz.w ? "sq" : "";
-    const inSlideMode = S.mode === "slide" && S.modeIns === ins.id && S.modeSlide === s.id;
+    const mp4 = S.mp4ok;
     return `
-      <h3 style="margin-top:4px">💬 スライド <span class="small">${ins.slides.length}枚・合計 ${INS.duration(ins).toFixed(1)}秒</span><span class="spacer"></span><button class="btn btn-sm btn-primary" data-action="fs-open">⛶ 全画面で編集</button></h3>
-      <div class="slide-tabs">
-        ${ins.slides.map((x, i) => `<button class="btn btn-sm ${x.id === s.id ? "active" : ""}" data-action="slide-select" data-id="${x.id}">${i + 1}${x.video ? " 🎥" : ""}</button>`).join("")}
-        <button class="btn btn-sm" data-action="slide-add">＋ スライド追加</button>
+      <h3>⬇ 書き出し</h3>
+      <div class="field"><label>サイズ</label><select data-bind="output.size">${SIZES.map((s) => `<option value="${s.k}" ${s.k === P.output.size ? "selected" : ""}>${s.label}</option>`).join("")}</select></div>
+      <div class="grid2">
+        <div class="field"><label>フレームレート</label><select data-bind="output.fps"><option value="30" ${P.output.fps == 30 ? "selected" : ""}>30 fps</option><option value="24" ${P.output.fps == 24 ? "selected" : ""}>24 fps</option><option value="60" ${P.output.fps == 60 ? "selected" : ""}>60 fps</option></select></div>
+        <div class="field"><label>ファイル名</label><input type="text" data-bind="output.name" value="${esc(P.output.name)}"></div>
       </div>
-      <div class="row">
-        <button class="btn btn-sm" data-action="slide-move" data-d="-1" ${idx === 0 ? "disabled" : ""}>← 前へ</button>
-        <button class="btn btn-sm" data-action="slide-move" data-d="1" ${idx === ins.slides.length - 1 ? "disabled" : ""}>次へ →</button>
-        <span class="spacer"></span>
-        <button class="btn btn-sm btn-danger" data-action="slide-del" ${ins.slides.length <= 1 ? "disabled" : ""}>このスライドを削除</button>
-      </div>
-      <div class="field"><label>文字（改行OK。ドラッグで選んだ部分だけに太字・下線・サイズを適用できます）</label>
-        <div class="ed-toolbar">
-          <button class="btn btn-sm" data-cmd="bold" data-keepfocus="1" title="太字"><b>B</b></button>
-          <button class="btn btn-sm" data-cmd="underline" data-keepfocus="1" title="下線"><u>U</u></button>
-          <span class="small" style="align-self:center;margin-left:4px">サイズ</span>
-          ${[1, 2, 3, 4, 5, 6, 7].map((n) => `<button class="btn btn-sm" data-cmd="fontSize" data-arg="${n}" data-keepfocus="1" style="padding:0 7px">${["xs", "s", "標準", "L", "XL", "2XL", "3XL"][n - 1]}</button>`).join("")}
-          <button class="btn btn-sm" data-cmd="removeFormat" data-keepfocus="1" title="装飾を解除">解除</button>
-        </div>
-        <div id="slide-editor" class="slide-editor ${cls} pos-${s.pos} al-${s.align}" contenteditable="true" data-slide-html="1" style="background:${esc(colors.bg)};color:${esc(colors.fg)};font-family:${VC.text.FONTS[colors.font] || VC.text.FONTS.sans}" spellcheck="false">${s.html || ""}</div>
-      </div>
-      <div class="row align-btns">
-        <span class="small">揃え</span>${alignBtns(s)}
-        <span class="small" style="margin-left:6px">位置</span><select data-sb="pos" style="width:auto"><option value="center" ${s.pos === "center" ? "selected" : ""}>中央</option><option value="top" ${s.pos === "top" ? "selected" : ""}>上</option><option value="bottom" ${s.pos === "bottom" ? "selected" : ""}>下</option></select>
-      </div>
-      <div class="row">
-        <label class="small row" style="gap:4px">背景 <input type="color" data-sb="bg" value="${esc(colors.bg)}"></label>
-        <label class="small row" style="gap:4px">文字 <input type="color" data-sb="fg" value="${esc(colors.fg)}"></label>
-        <button class="btn btn-sm" data-action="slide-colors-reset" title="テーマの色に戻す">テーマ色</button>
-      </div>
-      ${slideImagesBlock(s)}
-      ${s.video ? `
-        <div class="clip-item">
-          <span class="n">🎥 ${esc(s.video.name)}</span><span class="m">${TL.fmt(s.video.duration)}　→ ${INS.slideDuration(s).toFixed(1)}秒</span>
-          <button class="btn btn-sm ${inSlideMode ? "btn-primary" : ""}" data-action="slide-edit-video" style="width:auto;padding:0 8px">✂ 再生バーで編集</button>
-          <button class="btn btn-danger" data-action="slide-video-remove" title="動画を外す">✕</button>
-        </div>
-        <div class="note">「✂ 再生バーで編集」を押すと、下の再生バーがこの動画になります。字幕 / 倍速 / カットはいつも通り。文字はこの動画の上に重なります。</div>`
-      : `
-        <div class="row"><button class="btn btn-sm" data-action="slide-video-add">＋ 動画を載せる</button><span class="small">動画を載せると、長さは動画に合わせます</span></div>
-        ${num("表示時間", "__slide.dur", s.dur, 0.3, 10, 0.1, "秒")}`}
-      <div class="row">
-        <button class="btn btn-sm" data-action="ins-preview" data-id="${ins.id}">▶ プレビュー</button>
-        <button class="btn btn-sm btn-primary" data-action="ins-place" data-id="${ins.id}">📍 位置を決める</button>
-        ${ins.at != null ? `<span class="small">配置：元 ${TL.fmtMs(ins.at)} の直前</span>` : ""}
-      </div>`;
+      ${num("先頭のタイトルカード（サムネ用）", "output.sting", P.output.sting, 0, 0.5, 0.02, "秒")}
+      <div class="note">長さ ${TL.fmt(inf.total)}（タイトル ${inf.stingDur.toFixed(2)}s ＋ OP ${inf.openDur.toFixed(1)}s ＋ 本編 ${TL.fmt(inf.mainDur)}（埋め込み ${inf.insLayout.length}個）＋ ED ${inf.edDur.toFixed(1)}s）<br>${sz.w}×${sz.h}・${P.output.fps}fps・無音・${mp4 === false ? "webm" : "mp4 (H.264)"}</div>
+      ${mp4 === false ? `<div class="warn">このブラウザは mp4 書き出しに対応していないため webm になります。X / LinkedIn に投稿するなら <b>Chrome</b> で書き出してください。</div>` : mp4 === true ? `<div class="small">✅ mp4（H.264）で書き出せます。</div>` : `<div class="small">対応確認中…</div>`}
+      <button class="btn btn-primary" data-action="export" ${inf.total <= 0 ? "disabled" : ""} style="height:40px">⬇ 動画を書き出す</button>
+      <div class="note">1フレームずつ描いてエンコードするので、動画の長さの0.5〜1.5倍ほど時間がかかります。</div>
+      <details><summary class="small" style="cursor:pointer">データを全部消す</summary><div class="row" style="margin-top:6px"><button class="btn btn-sm btn-danger" data-action="wipe">全プロジェクトのクリップ・画像・設定を削除</button></div></details>`;
   }
-  function montageEditor(ins) {
-    return `
-      <h3 style="margin-top:4px">🎞 動画モンタージュ <span class="small">${ins.videos.length}本・${INS.montageDuration(ins).toFixed(1)}秒</span></h3>
-      <div class="drop" data-action="mv-add">＋ モンタージュに使う動画を追加（複数可）</div>
-      ${ins.videos.map((v, i) => {
-        const d = Number(v.duration) || 0;
-        const st = Number(v.start) || 0, en = v.end == null ? d : Number(v.end);
-        return `
-        <div class="mv-item">
-          <canvas data-mvthumb="${v.id}" width="144" height="80"></canvas>
-          <div class="f">
-            <div class="row" style="gap:4px"><span class="n" style="font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${i + 1}. ${esc(v.name)}</span>
-              <button class="btn btn-sm" data-action="mv-move" data-i="${i}" data-d="-1" ${i === 0 ? "disabled" : ""}>↑</button>
-              <button class="btn btn-sm" data-action="mv-move" data-i="${i}" data-d="1" ${i === ins.videos.length - 1 ? "disabled" : ""}>↓</button>
-              <button class="btn btn-sm btn-danger" data-action="mv-del" data-i="${i}">✕</button></div>
-            <label><span>開始 ${TL.fmtMs(st)}</span><input type="range" data-mv="start" data-i="${i}" min="0" max="${d.toFixed(2)}" step="0.1" value="${st}"></label>
-            <label><span>終了 ${TL.fmtMs(en)}</span><input type="range" data-mv="end" data-i="${i}" min="0" max="${d.toFixed(2)}" step="0.1" value="${en}"></label>
-          </div>
-        </div>`; }).join("")}
-      <div class="note">追加した順に、最初ゆっくり → だんだん速く切り替わります。範囲を指定しなければ先頭から使います（時間の都合で範囲の全部が流れるとは限りません）。</div>
-      ${num("モンタージュの長さ", "__ins.montageDur", ins.montageDur, 1, 15, 0.1, "秒")}
-      <div class="grid2">${num("最初の間隔", "__ins.intervalStart", ins.intervalStart, 0.15, 2, 0.05, "秒")}${num("最後の間隔", "__ins.intervalEnd", ins.intervalEnd, 0.04, 0.5, 0.01, "秒")}</div>
-      <div class="grid2">${num("加速の強さ", "__ins.accel", ins.accel, 1, 4, 0.1, "")}${num("最後のコマで止める", "__ins.lastHold", ins.lastHold, 0, 2, 0.05, "秒")}</div>
-      <div class="row">
-        <button class="btn btn-sm" data-action="ins-preview" data-id="${ins.id}">▶ プレビュー</button>
-        <button class="btn btn-sm btn-primary" data-action="ins-place" data-id="${ins.id}">📍 位置を決める</button>
-        ${ins.at != null ? `<span class="small">配置：元 ${TL.fmtMs(ins.at)} の直前</span>` : ""}
-      </div>`;
-  }
-  function drawMontageThumbs() {
-    for (const cv of $("panel").querySelectorAll("canvas[data-mvthumb]")) {
-      const v = runtime.videos[cv.dataset.mvthumb];
-      const c = cv.getContext("2d");
-      c.fillStyle = "#000"; c.fillRect(0, 0, cv.width, cv.height);
-      if (v && v.videoWidth) { try { R.drawVideoCover(c, cv.width, cv.height, v); } catch (e) {} }
-    }
-  }
-  function selectIns(id, slideId) {
-    S.selIns = id;
-    const ins = insById(id);
-    S.selSlide = ins && ins.type === "slides" ? (slideId || (ins.slides[0] && ins.slides[0].id)) : null;
-    if (S.tab !== "embed") setTab("embed"); else renderPanel();
-    renderTimeline();
-  }
+
+  // ---------- 埋め込み：プレビュー／配置 ----------
   function previewIns(id) {
-    const ins = insById(id);
-    if (!ins) return;
+    const d = deckById(id);
+    if (!d) return;
+    if (S.fs) closeFs(true);
     if (S.mode !== "project") exitMode();
-    if (ins.at != null) {
+    if (d.at != null) {
       const inf = R.info(P);
       const il = inf.insLayout.find((x) => x.ins.id === id);
       if (il) { setT(inf.opDur + il.outStart, { pause: true }); play(); return; }
@@ -876,160 +821,192 @@
     play();
   }
   function startPlace(id) {
+    if (S.fs) closeFs(true);
     if (S.mode !== "project") exitMode();
     if (!P.clips.length) { toast("先にクリップ（本編）を追加してください"); return; }
-    const ins = insById(id);
-    S.place = id; S.placeAt = ins && ins.at != null ? ins.at : null;
+    const d = deckById(id);
+    S.place = id; S.placeAt = d && d.at != null ? d.at : null;
     pause(); if (S.pop) closePopover();
     renderModeBar(); renderTimeline();
     toast("再生バーをクリックして位置を決めてください");
   }
   function finishPlace(ok) {
-    const ins = insById(S.place);
-    if (ok && ins && S.placeAt != null) { ins.at = S.placeAt; save(); toast(`${INS.label(ins)} を 元 ${TL.fmtMs(ins.at)} の直前に配置しました`); }
+    const d = deckById(S.place);
+    if (ok && d && S.placeAt != null) { d.at = S.placeAt; save(); toast(`${INS.label(d)} を 元 ${TL.fmtMs(d.at)} の直前に配置しました`); }
     S.place = null; S.placeAt = null;
     renderModeBar(); renderTimeline(); renderPanel(); setT(S.T, { pause: true });
   }
-  function alignBtns(s) {
-    return [["left", "⇤ 左"], ["center", "↔ 中央"], ["right", "⇥ 右"]].map(([a, l]) => `<button class="btn btn-sm ${(s.align || "center") === a ? "active" : ""}" data-action="slide-align" data-al="${a}">${l}</button>`).join("");
-  }
-  function slideImagesBlock(s) {
-    return `
-      <div class="field"><label>画像（${s.images.length}）</label>
-        <div class="row"><button class="btn btn-sm" data-action="slide-img-add">＋ 画像を追加</button><span class="small">Cmd+V でも可。位置・大きさ・切り取りは「⛶ 全画面で編集」で</span></div>
-        ${s.images.length ? `<div class="thumbs" style="margin-top:6px">${s.images.map((im) => `<div class="thumb"><img src="${runtime.images[im.id] ? runtime.images[im.id].src : ""}" alt=""><button class="x" data-action="slide-img-del" data-id="${im.id}">✕</button></div>`).join("")}</div>` : ""}
-      </div>`;
-  }
-  function slideHtmlInput(el) {
-    const s = selSlide();
-    if (!s) return;
-    s.html = el.innerHTML;
-    save();
-    if (S.fs) drawFsText();
-  }
-  function execCmd(cmd, arg) {
-    const ed = S.fs ? $("fs-editor") : $("slide-editor");
-    if (!ed) return;
-    ed.focus();
-    try { document.execCommand("styleWithCSS", false, false); document.execCommand(cmd, false, arg || null); } catch (e) {}
-    slideHtmlInput(ed);
+  function deleteDeck(id) {
+    const x = deckById(id);
+    if (!x || !confirm(`${INS.label(x)} を削除しますか？`)) return;
+    for (const v of INS.videoRefs(x)) { delete runtime.videos[v.id]; store.delBlob(v.id); }
+    for (const im of INS.imageRefs(x)) { delete runtime.images[im.id]; store.delBlob(im.id); }
+    if (S.fs && S.fs.deckId === id) closeFs(true);
+    if (S.modeIns === id) exitMode();
+    P.inserts = P.inserts.filter((y) => y.id !== id);
+    save(); renderPanel(); renderTimeline(); setT(Math.min(S.T, info().total), { pause: true });
   }
 
-  // ---------- 全画面スライド編集 ----------
-  function imageTarget() {
-    if (S.fs) return { kind: "slide", insId: S.fs.insId, slideId: S.fs.slideId };
-    if (S.tab === "embed") { const ins = selIns(), s = selSlide(); if (ins && s && ins.type === "slides") return { kind: "slide", insId: ins.id, slideId: s.id }; }
-    return { kind: "opening" };
-  }
-  function fsSlide() {
-    const ins = S.fs ? insById(S.fs.insId) : null;
-    return ins && ins.type === "slides" ? ins.slides.find((x) => x.id === S.fs.slideId) || null : null;
-  }
-  function openFs(insId, slideId) {
-    const ins = insById(insId);
-    if (!ins || ins.type !== "slides") return;
-    const s = ins.slides.find((x) => x.id === slideId) || ins.slides[0];
-    if (!s) return;
+  // ---------- 全画面スライドエディタ ----------
+  function fsDeck() { return S.fs ? deckById(S.fs.deckId) : null; }
+  function fsPage() { const d = fsDeck(); return d ? d.pages.find((x) => x.id === S.fs.pageId) || d.pages[0] || null : null; }
+  function fsGroup() { const pg = fsPage(), d = fsDeck(); return pg && pg.kind === "montage" && d ? d.groups[pg.group] || null : null; }
+  function openFs(deckId, pageId) {
+    const d = deckById(deckId);
+    if (!d) return;
     pause();
+    if (S.mode !== "project") { S.mode = "project"; S.modeIns = null; }
     if (S.pop) closePopover();
-    S.selIns = ins.id; S.selSlide = s.id;
-    S.fs = { insId: ins.id, slideId: s.id, selImg: null, crop: false, drag: null };
+    if (S.place) finishPlace(false);
+    S.fs = { deckId: d.id, pageId: pageId || d.pages[0].id, selImg: null, crop: false, drag: null, play: null, active: null, scrubSrc: null };
     $("slide-fs").classList.remove("hidden");
     renderFs();
   }
   function closeFs(silent) {
+    if (!S.fs) return;
+    fsStop();
+    if (S.pop) { S.pop = null; S.selectedRange = null; }
     S.fs = null;
     $("slide-fs").classList.add("hidden");
     $("slide-fs").innerHTML = "";
-    if (!silent) { renderPanel(); renderTimeline(); }
+    R.snaps = {};
+    if (!silent) { renderPanel(); renderModeBar(); renderTimeline(); setT(0, { pause: true }); }
   }
   function renderFs() {
-    const ins = S.fs ? insById(S.fs.insId) : null;
-    const s = fsSlide();
-    if (!ins || !s) { closeFs(); return; }
-    const idx = ins.slides.indexOf(s);
-    const colors = INS.colorsOf(s, P);
+    const d = fsDeck(), pg = fsPage();
+    if (!d || !pg) { closeFs(); return; }
+    S.fs.pageId = pg.id;
+    const colors = INS.colorsOf(pg, P);
+    const isM = pg.kind === "montage";
+    const g = fsGroup();
     $("slide-fs").innerHTML = `
       <div class="fs-top">
-        <b>⛶ スライド編集</b><span class="small">${esc(INS.label(ins))}</span>
-        <div class="slide-tabs">${ins.slides.map((x, i) => `<button class="btn btn-sm ${x.id === s.id ? "active" : ""}" data-action="fs-slide-select" data-id="${x.id}">${i + 1}${x.video ? " 🎥" : ""}${x.images.length ? " 🖼" : ""}</button>`).join("")}<button class="btn btn-sm" data-action="fs-slide-add" title="スライドを追加">＋</button></div>
-        <span class="spacer"></span>
-        <button class="btn btn-sm ${S.fs.crop ? "btn-primary" : ""}" data-action="fs-crop" ${S.fs.selImg ? "" : "disabled"}>✂ 切り取りモード</button>
-        <button class="btn btn-sm" data-action="fs-preview">▶ プレビュー</button>
-        <button class="btn btn-sm btn-primary" data-action="fs-close">✓ 完了</button>
-      </div>
-      <div class="fs-stage-wrap" id="fs-wrap">
-        <div class="fs-stage ${S.fs.crop ? "crop" : ""}" id="fs-stage"><canvas id="fs-bg"></canvas><div id="fs-imgs"></div><canvas id="fs-text" class="fs-text"></canvas></div>
-        <div class="fs-hint">${S.fs.crop ? "画像の4辺のバーをドラッグして切り取り（Esc または「✂」でモード終了）" : "画像：ドラッグで移動 ／ 右下の■で拡大縮小 ／ 選んで「✂ 切り取り」 ／ Delete で削除　｜　Cmd+V で画像を貼り付け"}</div>
-      </div>
-      <div class="fs-side">
-        <h4>文字</h4>
-        <div class="ed-toolbar">
+        <b>⛶</b><input type="text" data-fs="name" value="${esc(d.name || "")}" placeholder="埋め込みの名前（任意）">
+        <span class="sep"></span>
+        <div class="grp"><button class="btn btn-sm" data-action="fs-page-add" title="空のページを追加">＋ ページ</button><button class="btn btn-sm" data-action="fs-montage-new" title="動画を複数選ぶとモンタージュのページ群になります">🎞 モンタージュ</button></div>
+        <span class="sep"></span>
+        ${isM ? `<span class="small">モンタージュ用ページ（下の再生バーで「使う範囲」をダブルクリック＋ドラッグ）</span>` : `
+        <div class="grp">
           <button class="btn btn-sm" data-cmd="bold" data-keepfocus="1" title="太字"><b>B</b></button>
           <button class="btn btn-sm" data-cmd="underline" data-keepfocus="1" title="下線"><u>U</u></button>
-          <span class="small" style="align-self:center;margin-left:4px">サイズ</span>
-          ${[1, 2, 3, 4, 5, 6, 7].map((n) => `<button class="btn btn-sm" data-cmd="fontSize" data-arg="${n}" data-keepfocus="1" style="padding:0 7px">${["xs", "s", "標準", "L", "XL", "2XL", "3XL"][n - 1]}</button>`).join("")}
+          <select data-fscmd="fontSize" style="width:auto;padding:4px 6px;border:1px solid var(--line-2);border-radius:7px;background:var(--bg-2);color:var(--text);font:inherit;font-size:12px"><option value="">サイズ</option>${[1, 2, 3, 4, 5, 6, 7].map((n) => `<option value="${n}">${["xs", "s", "標準", "L", "XL", "2XL", "3XL"][n - 1]}</option>`).join("")}</select>
           <button class="btn btn-sm" data-cmd="removeFormat" data-keepfocus="1" title="装飾を解除">解除</button>
         </div>
-        <div id="fs-editor" class="slide-editor pos-${s.pos} al-${s.align}" contenteditable="true" data-slide-html="1" style="background:${esc(colors.bg)};color:${esc(colors.fg)};font-family:${VC.text.FONTS[colors.font] || VC.text.FONTS.sans}" spellcheck="false">${s.html || ""}</div>
-        <div class="row align-btns"><span class="small">揃え</span>${alignBtns(s)}</div>
-        <div class="row"><span class="small">位置</span><select data-sb="pos" style="width:auto"><option value="center" ${s.pos === "center" ? "selected" : ""}>中央</option><option value="top" ${s.pos === "top" ? "selected" : ""}>上</option><option value="bottom" ${s.pos === "bottom" ? "selected" : ""}>下</option></select>
-          <span class="spacer"></span>
-          <label class="small row" style="gap:4px">背景 <input type="color" data-sb="bg" value="${esc(colors.bg)}"></label>
-          <label class="small row" style="gap:4px">文字 <input type="color" data-sb="fg" value="${esc(colors.fg)}"></label>
-          <button class="btn btn-sm" data-action="slide-colors-reset" title="テーマの色に戻す">テーマ色</button></div>
-        <h4>画像（${s.images.length}）</h4>
-        <div class="row"><button class="btn btn-sm" data-action="slide-img-add">＋ 画像を追加</button><span class="small">または Cmd+V</span></div>
-        ${s.images.map((im, i) => `
-          <div class="clip-item" style="${S.fs.selImg === im.id ? "border-color:var(--primary)" : ""}">
-            <span class="n" style="cursor:pointer" data-action="fs-img-select" data-id="${im.id}">🖼 ${esc(im.name)}</span>
-            <button class="btn" data-action="fs-img-order" data-id="${im.id}" data-d="-1" ${i === 0 ? "disabled" : ""} title="後ろへ">↓</button>
-            <button class="btn" data-action="fs-img-order" data-id="${im.id}" data-d="1" ${i === s.images.length - 1 ? "disabled" : ""} title="前へ">↑</button>
-            <button class="btn btn-danger" data-action="fs-img-del" data-id="${im.id}" title="削除">✕</button>
-          </div>`).join("")}
-        <h4>スライド</h4>
-        ${s.video ? `<div class="note">🎥 動画「${esc(s.video.name)}」が載っています（長さは動画に合わせます）。動画の倍速・カット・字幕は、完了後に「✂ 再生バーで編集」から。</div>` : num("表示時間", "__slide.dur", s.dur, 0.3, 10, 0.1, "秒")}
-        <div class="row">
-          <button class="btn btn-sm" data-action="fs-move" data-d="-1" ${idx === 0 ? "disabled" : ""}>← 前のスライド</button>
-          <button class="btn btn-sm" data-action="fs-move" data-d="1" ${idx === ins.slides.length - 1 ? "disabled" : ""}>次のスライド →</button>
-          <span class="spacer"></span>
-          <button class="btn btn-sm btn-danger" data-action="fs-slide-del" ${ins.slides.length <= 1 ? "disabled" : ""}>このスライドを削除</button>
+        <span class="sep"></span>
+        <div class="grp align-btns">${[["left", "⇤"], ["center", "↔"], ["right", "⇥"]].map(([a, l]) => `<button class="btn btn-sm ${(pg.align || "center") === a ? "on" : ""}" data-action="fs-align" data-al="${a}" title="${a}">${l}</button>`).join("")}
+          <select data-sb="pos" style="width:auto;padding:4px 6px;border:1px solid var(--line-2);border-radius:7px;background:var(--bg-2);color:var(--text);font:inherit;font-size:12px"><option value="center" ${pg.pos === "center" ? "selected" : ""}>中央</option><option value="top" ${pg.pos === "top" ? "selected" : ""}>上</option><option value="bottom" ${pg.pos === "bottom" ? "selected" : ""}>下</option></select></div>
+        <span class="sep"></span>
+        <div class="grp"><label class="small row" style="gap:3px">背景<input type="color" data-sb="bg" value="${esc(colors.bg)}"></label><label class="small row" style="gap:3px">文字<input type="color" data-sb="fg" value="${esc(colors.fg)}"></label><button class="btn btn-sm" data-action="slide-colors-reset" title="テーマの色に戻す">テーマ色</button></div>
+        <span class="sep"></span>
+        <div class="grp"><button class="btn btn-sm" data-action="fs-img-add">🖼 画像</button><button class="btn btn-sm" data-action="fs-video-add">🎥 ${pg.video ? "動画を差替" : "動画"}</button>${pg.video ? `<button class="btn btn-sm btn-danger" data-action="fs-video-remove" title="動画を外す">🎥✕</button>` : ""}<button class="btn btn-sm ${S.fs.crop ? "on" : ""}" data-action="fs-crop" ${S.fs.selImg ? "" : "disabled"}>✂ 切り取り</button></div>`}
+        <span class="spacer"></span>
+        <div class="grp">${S.fs.play ? `<button class="btn btn-sm btn-primary" data-action="fs-stop">⏹ 停止</button>` : `<button class="btn btn-sm" data-action="fs-play-page">▶ ${isM ? "このモンタージュ" : "このページ"}</button><button class="btn btn-sm" data-action="fs-play-deck">▶ 全体</button>`}</div>
+        <span class="sep"></span>
+        <button class="btn btn-sm" data-action="ins-place" data-id="${d.id}">📍 配置${d.at != null ? `（元 ${TL.fmtMs(d.at)}）` : ""}</button>
+        <button class="btn btn-sm btn-primary" data-action="fs-close">✓ 完了</button>
+      </div>
+      <div class="fs-pages" id="fs-pages"></div>
+      <div class="fs-center" id="fs-center">
+        <div class="fs-stage-wrap" id="fs-wrap">
+          <div class="fs-stage ${S.fs.crop ? "crop" : ""} ${S.fs.play ? "fs-playing" : ""}" id="fs-stage"><canvas id="fs-bg"></canvas><div id="fs-imgs"></div><canvas id="fs-text" class="fs-text"></canvas></div>
+          <div class="fs-hint" id="fs-hint"></div>
         </div>
+        ${g ? `<div class="fs-gset"><b style="font-size:12px;color:#facc15">🎞 モンタージュの設定（このグループ共通）</b>
+          <div class="grid3">${num("長さ", "__g.montageDur", g.montageDur, 1, 15, 0.1, "秒")}${num("最初の間隔", "__g.intervalStart", g.intervalStart, 0.15, 2, 0.05, "秒")}${num("最後の間隔", "__g.intervalEnd", g.intervalEnd, 0.04, 0.5, 0.01, "秒")}</div>
+          <div class="grid2">${num("加速の強さ", "__g.accel", g.accel, 1, 4, 0.1, "")}${num("最後のコマで止める", "__g.lastHold", g.lastHold, 0, 2, 0.05, "秒")}</div>
+          <div class="small">使う範囲：${pg.video ? `${TL.fmtMs(INS.useRange(pg.video).start)} – ${TL.fmtMs(INS.useRange(pg.video).end)}` : "動画なし"}　<button class="btn btn-sm" data-action="fs-use-reset">全体に戻す</button>　<button class="btn btn-sm" data-action="fs-montage-add" data-gid="${pg.group}">＋ このモンタージュに動画を追加</button></div></div>` : ""}
+        <div class="timeline" id="fstl"><div class="tl-track" id="fstl-track"><div class="tl-clips" id="fstl-clips"></div><div class="tl-ranges" id="fstl-ranges"></div><div class="fs-usebar hidden" id="fstl-use"></div><div class="tl-selection hidden" id="fstl-selection"></div><div class="tl-playhead" id="fstl-playhead"></div></div></div>
+        <div class="tl-hint" id="fstl-hint"></div>
+        <div id="fs-popover" class="popover hidden"></div>
+        <div id="fs-range-list" class="range-list"></div>
+        ${isM ? "" : `<div class="fs-editor-wrap">
+          <div id="fs-editor" class="slide-editor pos-${pg.pos} al-${pg.align}" contenteditable="true" data-slide-html="1" style="background:${esc(colors.bg)};color:${esc(colors.fg)};font-family:${VC.text.FONTS[colors.font] || VC.text.FONTS.sans}" spellcheck="false">${pg.html || ""}</div>
+          <div class="row" style="margin-top:6px">${pg.video ? `<span class="small">🎥 「${esc(pg.video.name)}」：長さは動画（${INS.pageDuration(pg).toFixed(1)}秒）に合わせます</span>` : num("表示時間", "__page.dur", pg.dur, 0.3, 10, 0.1, "秒")}</div>
+        </div>`}
       </div>`;
+    renderFsPages();
     fitFsStage();
     renderFsStage();
+    renderFsTimeline();
+    bindTrack($("fstl-track"));
+  }
+  function renderFsPages() {
+    const d = fsDeck();
+    const box = $("fs-pages");
+    if (!d || !box) return;
+    const sz = sizeOf();
+    const th = Math.round((200 * sz.h) / sz.w);
+    const pageHtml = (p, i) => `
+      <div class="fs-page ${p.id === S.fs.pageId ? "sel" : ""}" data-action="fs-page-select" data-id="${p.id}">
+        <canvas data-pgthumb="${p.id}" width="200" height="${th}"></canvas>
+        <span class="no">${i + 1}</span><span class="tag">${p.kind === "montage" ? "🎞" : ""}${p.video ? "🎥" : ""}${p.images.length ? "🖼" : ""}${p.kind !== "montage" && INS.hasText(p) ? "💬" : ""}</span>
+        <div class="ops"><button class="btn" data-action="fs-page-move" data-id="${p.id}" data-d="-1" title="上へ">↑</button><button class="btn" data-action="fs-page-move" data-id="${p.id}" data-d="1" title="下へ">↓</button><button class="btn" data-action="fs-page-dup" data-id="${p.id}" title="複製">⧉</button><button class="btn btn-danger" data-action="fs-page-del" data-id="${p.id}" title="削除">✕</button></div>
+      </div>`;
+    let html = "", i = 0;
+    while (i < d.pages.length) {
+      const p = d.pages[i];
+      if (p.kind === "montage" && d.groups[p.group]) {
+        const gid = p.group;
+        let inner = "";
+        while (i < d.pages.length && d.pages[i].kind === "montage" && d.pages[i].group === gid) { inner += pageHtml(d.pages[i], i); i++; }
+        html += `<div class="fs-group"><div class="gh">🎞 モンタージュ <button class="btn" data-action="fs-montage-add" data-gid="${gid}">＋動画</button></div>${inner}</div>`;
+      } else { html += pageHtml(p, i); i++; }
+    }
+    box.innerHTML = html;
+    for (const cv of box.querySelectorAll("canvas[data-pgthumb]")) {
+      const p = d.pages.find((x) => x.id === cv.dataset.pgthumb);
+      if (!p) continue;
+      const c = cv.getContext("2d");
+      try { INS.drawPage(c, cv.width, cv.height, p, 0, P, runtime, { static: true, live: true, src: p.video ? INS.useRange(p.video).start : null }); } catch (e) {}
+    }
   }
   function fitFsStage() {
     const wrap = $("fs-wrap"), st = $("fs-stage");
     if (!wrap || !st) return;
     const sz = sizeOf();
-    const aw = wrap.clientWidth - 40, ah = wrap.clientHeight - 60;
+    const aw = wrap.clientWidth - 8, ah = Math.max(220, wrap.clientHeight - 30);
     let w = aw, h = (w * sz.h) / sz.w;
     if (h > ah) { h = ah; w = (h * sz.w) / sz.h; }
     st.style.width = `${Math.max(100, w)}px`;
     st.style.height = `${Math.max(60, h)}px`;
   }
-  function renderFsStage() {
-    const s = fsSlide(), st = $("fs-stage");
-    if (!s || !st) return;
-    st.classList.toggle("crop", !!S.fs.crop);
+  function renderFsBg() {
+    const pg = fsPage(), bg = $("fs-bg");
+    if (!pg || !bg) return;
     const sz = sizeOf();
-    const bg = $("fs-bg"); bg.width = sz.w; bg.height = sz.h;
-    INS.drawSlide(bg.getContext("2d"), sz.w, sz.h, s, 0, P, runtime, { noImages: true, noText: true, static: true });
+    if (bg.width !== sz.w) { bg.width = sz.w; bg.height = sz.h; }
+    const c = bg.getContext("2d");
+    if (S.fs.play) {
+      const d = fsDeck();
+      if (S.fs.play.kind === "deck") INS.draw(c, sz.w, sz.h, d, S.fs.play.T, P, runtime);
+      else { const b = INS.blockOfPage(d, pg.id); if (b && b.kind === "montage") INS.drawMontageBlock(c, sz.w, sz.h, b, S.fs.play.T, runtime); else INS.drawPage(c, sz.w, sz.h, pg, S.fs.play.T, P, runtime); }
+      return;
+    }
+    INS.drawPage(c, sz.w, sz.h, pg, 0, P, runtime, { live: true, src: S.fs.scrubSrc, noImages: true, noText: true });
+  }
+  function renderFsStage() {
+    const pg = fsPage(), st = $("fs-stage");
+    if (!pg || !st) return;
+    st.classList.toggle("crop", !!S.fs.crop);
+    st.classList.toggle("fs-playing", !!S.fs.play);
+    const sz = sizeOf();
     const tx = $("fs-text"); tx.width = sz.w; tx.height = sz.h;
+    renderFsBg();
     drawFsText();
-    $("fs-imgs").innerHTML = s.images.map((im) => imgElHtml(im)).join("");
-    for (const im of s.images) updateImgEl(im);
+    $("fs-imgs").innerHTML = pg.images.map((im) => imgElHtml(im)).join("");
+    for (const im of pg.images) updateImgEl(im);
+    const hint = $("fs-hint");
+    if (hint) hint.textContent = S.fs.play ? "再生中（⏹ で停止）" : S.fs.crop ? "画像の4辺のバーをドラッグして切り取り（Esc または「✂」で終了）" : pg.kind === "montage" ? "モンタージュ用ページ：下の再生バーで使う範囲を指定" : "画像：ドラッグで移動 ／ 右下の■で拡大縮小 ／ 選んで「✂ 切り取り」／ Delete で削除　｜　Cmd+V で画像を貼り付け";
   }
   function drawFsText() {
-    const s = fsSlide(), cv = $("fs-text");
-    if (!s || !cv) return;
+    const pg = fsPage(), cv = $("fs-text");
+    if (!pg || !cv) return;
     const c = cv.getContext("2d");
     c.clearRect(0, 0, cv.width, cv.height);
-    if (!INS.hasText(s)) return;
-    const colors = INS.colorsOf(s, P);
+    if (pg.kind === "montage" || !INS.hasText(pg)) return;
+    const colors = INS.colorsOf(pg, P);
     VC.text.use(colors);
-    INS.drawText(c, cv.width, cv.height, INS.parseHtml(s.html), 0, INS.slideDuration(s), P, colors, { pos: s.pos || "center", align: s.align || "center", overMedia: !!s.video || s.images.length > 0, static: true });
+    INS.drawText(c, cv.width, cv.height, INS.parseHtml(pg.html), 0, INS.pageDuration(pg), P, colors, { pos: pg.pos || "center", align: pg.align || "center", overMedia: !!pg.video || pg.images.length > 0, static: true });
   }
   function imgElHtml(im) {
     const img = runtime.images[im.id];
@@ -1052,26 +1029,114 @@
     if (box) for (const el of box.querySelectorAll(".fs-img")) el.classList.toggle("sel", el.dataset.img === id);
     const st = $("fs-stage"); if (st) st.classList.toggle("crop", !!S.fs.crop);
     const b = $("slide-fs").querySelector('[data-action="fs-crop"]');
-    if (b) { b.disabled = !id; b.classList.toggle("btn-primary", !!S.fs.crop); }
+    if (b) { b.disabled = !id; b.classList.toggle("on", !!S.fs.crop); }
   }
   function fsDeleteImage(id) {
-    const s = fsSlide();
-    if (!s) return;
-    s.images = s.images.filter((x) => x.id !== id);
+    const pg = fsPage();
+    if (!pg) return;
+    pg.images = pg.images.filter((x) => x.id !== id);
     delete runtime.images[id]; store.delBlob(id);
     S.fs.selImg = null; S.fs.crop = false;
     save(); renderFs();
   }
+  function renderFsTimeline() {
+    const pg = fsPage();
+    if (!pg || !$("fstl-track")) return;
+    const inf = info();
+    const total = inf.srcTotal || 1;
+    const v = pg.video;
+    $("fstl-clips").innerHTML = v ? `<div class="tl-clip" style="width:100%">${esc(v.name)}（${TL.fmt(v.duration)}）</div>` : `<div class="tl-clip" style="width:100%;align-items:center;justify-content:center;font-size:11px">動画なし（上の「🎥 動画」で載せられます）</div>`;
+    const ranges = ctxRanges();
+    $("fstl-ranges").innerHTML = rangeBarHtml(ranges, total);
+    const use = $("fstl-use");
+    if (pg.kind === "montage" && v) { const r = INS.useRange(v); use.classList.remove("hidden"); use.style.left = `${(r.start / total) * 100}%`; use.style.width = `${(r.dur / total) * 100}%`; }
+    else use.classList.add("hidden");
+    $("fs-range-list").innerHTML = rangeListHtml(ranges);
+    $("fstl-hint").innerHTML = pg.kind === "montage"
+      ? `<b>ダブルクリックしてそのままドラッグ</b>：このページの動画から使う範囲（黄色）を指定`
+      : `クリック：その時点へ　｜　<b>ダブルクリックしてそのままドラッグ</b>：範囲を選んで「字幕 / 倍速 / カット」　｜　範囲をクリック：編集`;
+    updateFsPlayhead();
+  }
+  function updateFsPlayhead() {
+    const pg = fsPage(), ph = $("fstl-playhead");
+    if (!pg || !ph) return;
+    const total = pg.video ? pg.video.duration || 1 : 1;
+    let src = S.fs.scrubSrc != null ? S.fs.scrubSrc : 0;
+    if (S.fs.play && pg.video) {
+      const st = S.fs.play.kind === "deck" ? INS.videoState(fsDeck(), S.fs.play.T) : (INS.blockOfPage(fsDeck(), pg.id) && INS.blockOfPage(fsDeck(), pg.id).kind === "montage" ? INS.montageState(INS.blockOfPage(fsDeck(), pg.id), S.fs.play.T) : INS.pageVideoState(pg, S.fs.play.T));
+      if (st && st.id === pg.video.id) src = st.time;
+    }
+    ph.style.left = `calc(${Math.max(0, Math.min(100, (src / total) * 100))}% - 1px)`;
+  }
+  function fsSeekSrc(src) {
+    const pg = fsPage();
+    if (!pg || !pg.video) return;
+    fsStop();
+    src = Math.max(0, Math.min((pg.video.duration || 0) - 1e-3, src));
+    S.fs.scrubSrc = src;
+    const v = runtime.videos[pg.video.id];
+    if (v && Math.abs(v.currentTime - src) > 0.03) v.currentTime = src;
+    updateFsPlayhead();
+  }
+  function fsPlay(kind) {
+    S.fs.play = { kind, T: 0 };
+    S.fs.scrubSrc = null;
+    renderFs();
+  }
+  function fsStop() {
+    if (!S.fs || !S.fs.play) return;
+    S.fs.play = null;
+    if (S.fs.active) { try { S.fs.active.pause(); } catch (e) {} S.fs.active = null; }
+    renderFs();
+  }
+  function fsTick(dt) {
+    const pg = fsPage(), d = fsDeck();
+    if (!pg || !d) return;
+    if (S.fs.play) {
+      const pl = S.fs.play;
+      pl.T += dt;
+      let dur, st;
+      if (pl.kind === "deck") { dur = INS.duration(d); st = INS.videoState(d, pl.T); }
+      else { const b = INS.blockOfPage(d, pg.id); dur = b ? b.dur : INS.pageDuration(pg); st = b && b.kind === "montage" ? INS.montageState(b, pl.T) : INS.pageVideoState(pg, pl.T); }
+      const v = st ? runtime.videos[st.id] : null;
+      if (v) {
+        if (S.fs.active && S.fs.active !== v) S.fs.active.pause();
+        S.fs.active = v;
+        if (Math.abs(v.currentTime - st.time) > 0.3) v.currentTime = st.time;
+        try { v.playbackRate = Math.min(16, st.rate || 1); } catch (e) {}
+        if (v.paused) v.play().catch(() => {});
+      } else if (S.fs.active) { S.fs.active.pause(); S.fs.active = null; }
+      if (pl.T >= dur) { fsStop(); return; }
+      renderFsBg();
+      updateFsPlayhead();
+      return;
+    }
+    if (pg.video) renderFsBg();
+  }
+  function slideHtmlInput(el) {
+    const pg = fsPage();
+    if (!pg) return;
+    pg.html = el.innerHTML;
+    save();
+    drawFsText();
+  }
+  function execCmd(cmd, arg) {
+    const ed = $("fs-editor");
+    if (!ed) return;
+    ed.focus();
+    try { document.execCommand("styleWithCSS", false, false); document.execCommand(cmd, false, arg || null); } catch (e) {}
+    slideHtmlInput(ed);
+  }
   const fsEl = $("slide-fs");
   fsEl.addEventListener("pointerdown", (e) => {
-    if (!S.fs) return;
+    if (!S.fs || S.fs.play) return;
     const stage = $("fs-stage");
     if (!stage || !stage.contains(e.target)) return;
-    const s = fsSlide();
-    if (!s) return;
+    const pg = fsPage();
+    if (!pg) return;
     const imEl = e.target.closest(".fs-img");
     if (!imEl) { if (S.fs.selImg) fsSelectImg(null); return; }
-    const im = s.images.find((x) => x.id === imEl.dataset.img);
+    const im = pg.images.find((x) => x.id === imEl.dataset.img);
     if (!im) return;
     if (S.fs.selImg !== im.id) fsSelectImg(im.id);
     const rect = stage.getBoundingClientRect();
@@ -1087,8 +1152,8 @@
   fsEl.addEventListener("pointermove", (e) => {
     const d = S.fs && S.fs.drag;
     if (!d) return;
-    const s = fsSlide();
-    const im = s && s.images.find((x) => x.id === d.id);
+    const pg = fsPage();
+    const im = pg && pg.images.find((x) => x.id === d.id);
     if (!im) return;
     const nx = (e.clientX - d.rect.left) / d.rect.width, ny = (e.clientY - d.rect.top) / d.rect.height;
     const dx = nx - d.nx, dy = ny - d.ny, o = d.orig;
@@ -1103,7 +1168,7 @@
     }
     updateImgEl(im);
   });
-  const fsEndDrag = () => { if (S.fs && S.fs.drag) { S.fs.drag = null; save(); } };
+  const fsEndDrag = () => { if (S.fs && S.fs.drag) { S.fs.drag = null; save(); renderFsPages(); } };
   fsEl.addEventListener("pointerup", fsEndDrag);
   fsEl.addEventListener("pointercancel", fsEndDrag);
   window.addEventListener("resize", () => { if (S.fs) fitFsStage(); });
@@ -1118,7 +1183,7 @@
     const el = $("style-picker");
     el.classList.remove("hidden");
     el.innerHTML = `<div class="picker-body">
-      <div class="row" style="align-items:flex-start"><div><h2>動画の型を選ぶ</h2><p class="lead">OPとEDが自動で流れます。クリックで選択。後からオープニング／エンディングのタブで変えられます。色・フォントも後から自由に変えられます。</p></div><span class="spacer"></span><button class="btn" data-action="picker-close">閉じる</button></div>
+      <div class="row" style="align-items:flex-start"><div><h2>動画の型を選ぶ</h2><p class="lead">OPとEDが自動で流れます。クリックで選択。後からオープニング／エンディングのタブで変えられます。</p></div><span class="spacer"></span><button class="btn" data-action="picker-close">閉じる</button></div>
       <div class="style-cards">${VC.styles.list.map((st) => `
         <div class="style-card ${st.id === P.style ? "current" : ""}" data-action="style-choose" data-id="${st.id}">
           <div class="pv"><div><div class="lbl">オープニング</div><canvas data-pv="op" data-style="${st.id}" width="480" height="270"></canvas></div><div><div class="lbl">エンディング</div><canvas data-pv="ed" data-style="${st.id}" width="480" height="270"></canvas></div></div>
@@ -1150,35 +1215,9 @@
   }
   function chooseStyle(id) {
     const st = VC.styles.get(id);
-    if (st.id !== P.style) {
-      P.style = st.id;
-      P.colors = VC.styles.defaultColors(st.id);
-      VC.opening._cache = null;
-      save();
-      toast(`型を「${st.name}」にしました`);
-    }
+    if (st.id !== P.style) { P.style = st.id; P.colors = VC.styles.defaultColors(st.id); VC.opening._cache = null; save(); toast(`型を「${st.name}」にしました`); }
     closePicker();
     renderPanel(); renderTimeline(); setT(0, { pause: true });
-  }
-
-  function panelExport() {
-    const inf = R.info(P);
-    const sz = sizeOf();
-    const mp4 = S.mp4ok;
-    return `
-      <h3>⬇ 書き出し</h3>
-      <div class="field"><label>サイズ</label><select data-bind="output.size">${SIZES.map((s) => `<option value="${s.k}" ${s.k === P.output.size ? "selected" : ""}>${s.label}</option>`).join("")}</select></div>
-      <div class="grid2">
-        <div class="field"><label>フレームレート</label><select data-bind="output.fps"><option value="30" ${P.output.fps == 30 ? "selected" : ""}>30 fps</option><option value="24" ${P.output.fps == 24 ? "selected" : ""}>24 fps</option><option value="60" ${P.output.fps == 60 ? "selected" : ""}>60 fps</option></select></div>
-        <div class="field"><label>ファイル名</label><input type="text" data-bind="output.name" value="${esc(P.output.name)}"></div>
-      </div>
-      ${num("先頭のタイトルカード（サムネ用）", "output.sting", P.output.sting, 0, 0.5, 0.02, "秒")}
-      <div class="note">動画の一番最初に、アプリ名（エンディングの文字）をほんの一瞬だけ表示します。SNSのサムネイルがこれになります。0.1秒＝約3フレーム。0 でオフ。</div>
-      <div class="note">長さ ${TL.fmt(inf.total)}（タイトル ${inf.stingDur.toFixed(2)}s ＋ OP ${inf.openDur.toFixed(1)}s ＋ 本編 ${TL.fmt(inf.mainDur)} ＋ ED ${inf.edDur.toFixed(1)}s）<br>${sz.w}×${sz.h}・${P.output.fps}fps・無音・${mp4 === false ? "webm" : "mp4 (H.264)"}</div>
-      ${mp4 === false ? `<div class="warn">このブラウザは mp4 書き出しに対応していないため webm になります。X / LinkedIn に投稿するなら <b>Chrome</b> で書き出してください。</div>` : mp4 === true ? `<div class="small">✅ mp4（H.264）で書き出せます。X / LinkedIn にそのまま投稿できます。</div>` : `<div class="small">対応確認中…</div>`}
-      <button class="btn btn-primary" data-action="export" ${inf.total <= 0 ? "disabled" : ""} style="height:40px">⬇ 動画を書き出す</button>
-      <div class="note">1フレームずつ描いてエンコードするので、動画の長さの0.5〜1.5倍ほど時間がかかります。書き出し中はこのタブを閉じないでください。</div>
-      <details><summary class="small" style="cursor:pointer">データを全部消す</summary><div class="row" style="margin-top:6px"><button class="btn btn-sm btn-danger" data-action="wipe">全プロジェクトのクリップ・画像・設定を削除</button></div></details>`;
   }
 
   // ---------- export ----------
@@ -1204,10 +1243,7 @@
         VC.exporter.download(res.blob, `${name}.${res.ext}`);
         toast(`書き出し完了：${name}.${res.ext}（${(res.blob.size / 1048576).toFixed(1)} MB）`);
       } else toast("書き出しをキャンセルしました");
-    } catch (e) {
-      console.error(e);
-      toast(`書き出しに失敗：${e.message}`);
-    }
+    } catch (e) { console.error(e); toast(`書き出しに失敗：${e.message}`); }
     S.exporting = false;
     ov.classList.add("hidden");
     setT(0, { pause: true });
@@ -1232,14 +1268,8 @@
     if (el.type === "checkbox") v = el.checked;
     else if (el.type === "range" || el.type === "number") v = Number(el.value);
     else v = el.value;
-    if (path.startsWith("__slide.")) {
-      const s = selSlide(); if (!s) return;
-      s[path.slice(8)] = v; save(); updateRangeLabel(el, v); renderTimeline(); return;
-    }
-    if (path.startsWith("__ins.")) {
-      const ins = selIns(); if (!ins) return;
-      ins[path.slice(6)] = v; save(); updateRangeLabel(el, v); renderTimeline(); return;
-    }
+    if (path.startsWith("__page.")) { const pg = fsPage(); if (!pg) return; pg[path.slice(7)] = v; save(); updateRangeLabel(el, v); return; }
+    if (path.startsWith("__g.")) { const g = fsGroup(); if (!g) return; g[path.slice(4)] = v; save(); updateRangeLabel(el, v); return; }
     if (path === "opening.words") v = String(v).split(/[\s,、]+/).filter(Boolean);
     if (path === "opening.sentences") v = String(v).split(/\n/).map((x) => x.trim()).filter(Boolean);
     if (path === "output.fps") v = Number(v);
@@ -1260,34 +1290,22 @@
     const el = e.target;
     if (el.dataset && el.dataset.bind) { onBind(el, false); return; }
     if (el.dataset && el.dataset.slideHtml) { slideHtmlInput(el); return; }
+    if (el.dataset && el.dataset.fs === "name") { const d = fsDeck(); if (d) { d.name = el.value; save(); } return; }
     if (el.dataset && el.dataset.sb) {
-      const s = selSlide(); if (!s) return;
+      const pg = fsPage(); if (!pg) return;
       if (el.dataset.sb === "bg" || el.dataset.sb === "fg") {
-        s[el.dataset.sb] = el.value;
-        for (const ed of [$("slide-editor"), $("fs-editor")]) if (ed) ed.style[el.dataset.sb === "bg" ? "background" : "color"] = el.value;
-        save();
-        if (S.fs) renderFsStage();
+        pg[el.dataset.sb] = el.value;
+        const ed = $("fs-editor"); if (ed) ed.style[el.dataset.sb === "bg" ? "background" : "color"] = el.value;
+        save(); renderFsBg(); drawFsText();
       }
-      return;
-    }
-    if (el.dataset && el.dataset.mv) {
-      const ins = selIns(); if (!ins || ins.type !== "montage") return;
-      const v = ins.videos[Number(el.dataset.i)]; if (!v) return;
-      const d = Number(v.duration) || 0;
-      if (el.dataset.mv === "start") { v.start = Math.min(Number(el.value), (v.end == null ? d : v.end) - 0.1); el.value = v.start; }
-      else { v.end = Math.max(Number(el.value), (v.start || 0) + 0.1); el.value = v.end; }
-      const span = el.previousElementSibling; if (span) span.textContent = `${el.dataset.mv === "start" ? "開始" : "終了"} ${TL.fmtMs(Number(el.value))}`;
-      save();
     }
   });
   document.addEventListener("change", (e) => {
     const el = e.target;
     if (el.dataset && el.dataset.bind) { onBind(el, el.type !== "range"); return; }
-    if (el.dataset && el.dataset.sb === "pos") {
-      const s = selSlide();
-      if (s) { s.pos = el.value; save(); for (const ed of [$("slide-editor"), $("fs-editor")]) if (ed) ed.className = ed.className.replace(/pos-\w+/, `pos-${s.pos}`); if (S.fs) drawFsText(); }
-      return;
-    }
+    if (el.dataset && el.dataset.fscmd === "fontSize") { if (el.value) execCmd("fontSize", el.value); el.value = ""; return; }
+    if (el.dataset && el.dataset.sb === "pos") { const pg = fsPage(); if (pg) { pg.pos = el.value; save(); const ed = $("fs-editor"); if (ed) ed.className = ed.className.replace(/pos-\w+/, `pos-${pg.pos}`); drawFsText(); renderFsPages(); } return; }
+    if (el.dataset && el.dataset.sb) { const pg = fsPage(); if (pg) renderFsPages(); return; }
     if (el.id === "file-video") { addVideoFiles(el.files, S.fileTarget); S.fileTarget = { kind: "clip" }; el.value = ""; }
     if (el.id === "file-image") { addImageFiles(el.files, S.imgTarget); S.imgTarget = { kind: "opening" }; el.value = ""; }
   });
@@ -1298,7 +1316,7 @@
     const el = e.target.closest("[data-action]");
     if (!el) return;
     const a = el.dataset.action, id = el.dataset.id, i = Number(el.dataset.i);
-    const ins = selIns(), sl = selSlide();
+    const d = fsDeck(), pg = fsPage();
     switch (a) {
       case "add-videos": S.fileTarget = { kind: "clip" }; $("file-video").click(); break;
       case "add-images": S.imgTarget = { kind: "opening" }; $("file-image").click(); break;
@@ -1336,125 +1354,79 @@
       case "picker-close": closePicker(); break;
       case "style-choose": chooseStyle(id); break;
       case "colors-reset": P.colors = VC.styles.defaultColors(P.style); save(); renderPanel(); toast("色・フォントを既定に戻しました"); break;
-      case "mode-exit": exitMode(); renderPanel(); break;
+      case "mode-exit": exitMode(); break;
 
-      // ranges
-      case "range-jump": { const r = ctxRanges().find((x) => x.id === id); if (r) seekSrc(r.start); break; }
+      // ranges / popover
+      case "range-jump": { const r = ctxRanges().find((x) => x.id === id); if (r) doSeek(r.start); break; }
       case "range-edit": { const r = ctxRanges().find((x) => x.id === id); if (r) openPopover(r, false); break; }
-      case "range-del": { const rs = ctxRanges(); const k = rs.findIndex((x) => x.id === id); if (k !== -1) rs.splice(k, 1); R.snaps = {}; save(); renderTimeline(); if (S.mode === "slide") renderPanel(); break; }
+      case "range-del": deleteRange(id); break;
       case "pop-close": closePopover(); break;
       case "pop-back": S.pop.r.type = null; renderPopover(); break;
       case "pop-type": S.pop.r.type = el.dataset.type; if (el.dataset.type === "speed") S.pop.r.rate = S.pop.r.rate || 2; if (el.dataset.type === "caption") S.pop.r.color = S.pop.r.color || CAP_COLORS[0]; renderPopover(); break;
       case "pop-color": S.pop.r.color = el.dataset.color; S.pop.r.text = val("pop-text"); renderPopover(); break;
       case "pop-rate": S.pop.r.rate = Number(el.dataset.rate); renderPopover(); break;
-      case "pop-delete": { const rs = ctxRanges(); const k = rs.findIndex((x) => x.id === S.pop.r.id); if (k !== -1) rs.splice(k, 1); save(); closePopover(); if (S.mode === "slide") renderPanel(); toast("削除しました"); break; }
+      case "pop-delete": { const rid = S.pop.r.id; closePopover(); deleteRange(rid); toast("削除しました"); break; }
       case "pop-save": savePopover(); break;
 
-      // inserts
-      case "ins-new-slides": { const x = INS.newSlides(); P.inserts.push(x); save(); selectIns(x.id); break; }
-      case "ins-new-montage": { const x = INS.newMontage(); P.inserts.push(x); save(); selectIns(x.id); break; }
-      case "ins-select": case "ins-marker": selectIns(id); break;
+      // inserts（メイン側）
+      case "ins-new": { const x = INS.newDeck(); P.inserts.push(x); save(); renderPanel(); openFs(x.id); break; }
+      case "ins-open": case "ins-marker": if (deckById(id)) openFs(id); break;
       case "ins-preview": previewIns(id); break;
       case "ins-place": startPlace(id); break;
-      case "ins-del": {
-        const x = insById(id);
-        if (!x || !confirm(`${INS.label(x)} を削除しますか？`)) break;
-        for (const v of INS.videoRefs(x)) { delete runtime.videos[v.id]; store.delBlob(v.id); }
-        for (const im of INS.imageRefs(x)) { delete runtime.images[im.id]; store.delBlob(im.id); }
-        if (S.fs && S.fs.insId === id) closeFs(true);
-        P.inserts = P.inserts.filter((y) => y.id !== id);
-        if (S.selIns === id) { S.selIns = null; S.selSlide = null; }
-        if (S.modeIns === id) exitMode();
-        save(); renderPanel(); renderTimeline(); setT(Math.min(S.T, info().total), { pause: true }); break;
-      }
+      case "ins-unplace": { const x = deckById(id); if (x) { x.at = null; save(); renderPanel(); renderTimeline(); setT(Math.min(S.T, info().total), { pause: true }); toast("配置を外しました（埋め込み自体は残ります）"); } break; }
+      case "ins-del": deleteDeck(id); break;
       case "place-end": S.placeAt = R.info(P).srcTotal; renderModeBar(); renderTimeline(); break;
       case "place-ok": finishPlace(true); break;
       case "place-cancel": finishPlace(false); break;
 
-      // slides
-      case "slide-select": S.selSlide = id; renderPanel(); if (S.mode === "slide" && S.modeIns === ins.id) { S.modeSlide = id; enterMode("slide", ins.id, id); } break;
-      case "slide-add": { if (!ins) break; const s = INS.newSlide(); ins.slides.push(s); S.selSlide = s.id; save(); renderPanel(); renderTimeline(); break; }
-      case "slide-del": {
-        if (!ins || !sl || ins.slides.length <= 1) break;
-        if (sl.video) { delete runtime.videos[sl.video.id]; store.delBlob(sl.video.id); }
-        for (const im of sl.images || []) { delete runtime.images[im.id]; store.delBlob(im.id); }
-        ins.slides = ins.slides.filter((x) => x.id !== sl.id);
-        S.selSlide = ins.slides[0].id;
-        if (S.modeSlide === sl.id) exitMode();
-        save(); renderPanel(); renderTimeline(); break;
-      }
-      case "slide-move": {
-        if (!ins || !sl) break;
-        const k = ins.slides.indexOf(sl), j = k + Number(el.dataset.d);
-        if (j < 0 || j >= ins.slides.length) break;
-        [ins.slides[k], ins.slides[j]] = [ins.slides[j], ins.slides[k]];
-        save(); renderPanel(); break;
-      }
-      case "slide-colors-reset": if (sl) { sl.bg = null; sl.fg = null; save(); renderPanel(); } break;
-      case "slide-video-add": if (ins && sl) { S.fileTarget = { kind: "slide", insId: ins.id, slideId: sl.id }; $("file-video").click(); } break;
-      case "slide-video-remove": {
-        if (!ins || !sl || !sl.video) break;
-        delete runtime.videos[sl.video.id]; store.delBlob(sl.video.id);
-        sl.video = null; sl.ranges = [];
-        if (S.modeSlide === sl.id) exitMode();
-        save(); renderPanel(); renderTimeline(); break;
-      }
-      case "slide-edit-video": if (ins && sl) { enterMode("slide", ins.id, sl.id); renderPanel(); } break;
-
-      // slide: align / images
-      case "slide-align": if (sl) { sl.align = el.dataset.al; save(); if (S.fs) renderFs(); else renderPanel(); } break;
-      case "slide-img-add": if (ins && sl) { S.imgTarget = { kind: "slide", insId: ins.id, slideId: sl.id }; $("file-image").click(); } break;
-      case "slide-img-del": if (sl) { sl.images = sl.images.filter((x) => x.id !== id); delete runtime.images[id]; store.delBlob(id); save(); renderPanel(); } break;
-
-      // fullscreen slide editor
-      case "fs-open": if (ins && sl) openFs(ins.id, sl.id); break;
+      // fullscreen editor
       case "fs-close": closeFs(); break;
-      case "fs-crop": if (S.fs && S.fs.selImg) { S.fs.crop = !S.fs.crop; renderFs(); } break;
-      case "fs-preview": { if (!S.fs) break; const pid = S.fs.insId; closeFs(); previewIns(pid); break; }
-      case "fs-slide-select": if (S.fs) { S.fs.slideId = id; S.selSlide = id; S.fs.selImg = null; S.fs.crop = false; renderFs(); } break;
-      case "fs-slide-add": { if (!S.fs || !ins) break; const s = INS.newSlide(); ins.slides.push(s); S.fs.slideId = s.id; S.selSlide = s.id; S.fs.selImg = null; S.fs.crop = false; save(); renderFs(); renderTimeline(); break; }
-      case "fs-move": {
-        if (!S.fs || !ins || !sl) break;
-        const k = ins.slides.indexOf(sl), j = k + Number(el.dataset.d);
-        if (j < 0 || j >= ins.slides.length) break;
-        const t = ins.slides[j]; S.fs.slideId = t.id; S.selSlide = t.id; S.fs.selImg = null; S.fs.crop = false; renderFs(); break;
+      case "fs-page-select": if (S.fs) { fsStop(); S.fs.pageId = id; S.fs.selImg = null; S.fs.crop = false; S.fs.scrubSrc = null; if (S.pop) closePopover(); renderFs(); } break;
+      case "fs-page-add": { if (!d) break; const np = INS.newPage("slide"); const k = d.pages.findIndex((x) => x.id === S.fs.pageId); d.pages.splice(k + 1, 0, np); S.fs.pageId = np.id; S.fs.selImg = null; save(); renderFs(); break; }
+      case "fs-page-dup": {
+        if (!d) break;
+        const src = d.pages.find((x) => x.id === id); if (!src) break;
+        const cp = JSON.parse(JSON.stringify(src)); cp.id = store.uid("s"); cp.video = null; cp.ranges = []; cp.images = []; cp.kind = "slide"; cp.group = null;
+        d.pages.splice(d.pages.indexOf(src) + 1, 0, cp); S.fs.pageId = cp.id; save(); renderFs(); toast("文字と色を複製しました（動画・画像は含みません）"); break;
       }
-      case "fs-slide-del": {
-        if (!S.fs || !ins || !sl || ins.slides.length <= 1) break;
-        if (!confirm("このスライドを削除しますか？")) break;
-        if (sl.video) { delete runtime.videos[sl.video.id]; store.delBlob(sl.video.id); }
-        for (const im of sl.images || []) { delete runtime.images[im.id]; store.delBlob(im.id); }
-        ins.slides = ins.slides.filter((x) => x.id !== sl.id);
-        S.fs.slideId = ins.slides[0].id; S.selSlide = S.fs.slideId; S.fs.selImg = null; S.fs.crop = false;
-        if (S.modeSlide === sl.id) exitMode();
-        save(); renderFs(); renderTimeline(); break;
-      }
-      case "fs-img-select": if (S.fs) { S.fs.selImg = id; S.fs.crop = false; renderFs(); } break;
-      case "fs-img-del": fsDeleteImage(id); break;
-      case "fs-img-order": {
-        if (!sl) break;
-        const k = sl.images.findIndex((x) => x.id === id), j = k + Number(el.dataset.d);
-        if (k === -1 || j < 0 || j >= sl.images.length) break;
-        [sl.images[k], sl.images[j]] = [sl.images[j], sl.images[k]];
+      case "fs-page-move": {
+        if (!d) break;
+        const k = d.pages.findIndex((x) => x.id === id), j = k + Number(el.dataset.d);
+        if (k === -1 || j < 0 || j >= d.pages.length) break;
+        [d.pages[k], d.pages[j]] = [d.pages[j], d.pages[k]];
         save(); renderFs(); break;
       }
-
-      // montage videos
-      case "mv-add": if (ins) { S.fileTarget = { kind: "montage", insId: ins.id }; $("file-video").click(); } break;
-      case "mv-move": {
-        if (!ins) break;
-        const j = i + Number(el.dataset.d);
-        if (j < 0 || j >= ins.videos.length) break;
-        [ins.videos[i], ins.videos[j]] = [ins.videos[j], ins.videos[i]];
-        save(); renderPanel(); break;
+      case "fs-page-del": {
+        if (!d) break;
+        const x = d.pages.find((p) => p.id === id); if (!x) break;
+        if (d.pages.length <= 1) { toast("最後のページは削除できません"); break; }
+        if (!confirm("このページを削除しますか？")) break;
+        if (x.video) { delete runtime.videos[x.video.id]; store.delBlob(x.video.id); }
+        for (const im of x.images) { delete runtime.images[im.id]; store.delBlob(im.id); }
+        d.pages = d.pages.filter((p) => p.id !== id);
+        if (x.group && !d.pages.some((p) => p.group === x.group)) delete d.groups[x.group];
+        if (S.fs.pageId === id) S.fs.pageId = d.pages[0].id;
+        save(); renderFs(); break;
       }
-      case "mv-del": {
-        if (!ins) break;
-        const v = ins.videos[i]; if (!v) break;
-        delete runtime.videos[v.id]; store.delBlob(v.id);
-        ins.videos.splice(i, 1);
-        save(); renderPanel(); renderTimeline(); break;
+      case "fs-align": if (pg) { pg.align = el.dataset.al; save(); renderFs(); } break;
+      case "slide-colors-reset": if (pg) { pg.bg = null; pg.fg = null; save(); renderFs(); } break;
+      case "fs-img-add": if (d && pg) { S.imgTarget = { kind: "page", deckId: d.id, pageId: pg.id }; $("file-image").click(); } break;
+      case "fs-video-add": if (d && pg) { S.fileTarget = { kind: "page", deckId: d.id, pageId: pg.id }; $("file-video").click(); } break;
+      case "fs-video-remove": {
+        if (!pg || !pg.video) break;
+        delete runtime.videos[pg.video.id]; store.delBlob(pg.video.id);
+        pg.video = null; pg.ranges = [];
+        if (pg.kind === "montage") { pg.kind = "slide"; if (!d.pages.some((p) => p.group === pg.group)) delete d.groups[pg.group]; pg.group = null; }
+        save(); renderFs(); break;
       }
+      case "fs-montage-new": if (d) { S.fileTarget = { kind: "montage-new", deckId: d.id }; $("file-video").click(); } break;
+      case "fs-montage-add": e.stopPropagation(); if (d) { S.fileTarget = { kind: "montage-add", deckId: d.id, gid: el.dataset.gid }; $("file-video").click(); } break;
+      case "fs-use-reset": if (pg && pg.video) { pg.video.start = 0; pg.video.end = null; save(); renderFs(); } break;
+      case "fs-crop": if (S.fs && S.fs.selImg) { S.fs.crop = !S.fs.crop; renderFs(); } break;
+      case "fs-img-del": fsDeleteImage(id); break;
+      case "fs-play-page": if (S.fs) fsPlay("page"); break;
+      case "fs-play-deck": if (S.fs) fsPlay("deck"); break;
+      case "fs-stop": fsStop(); break;
       default: break;
     }
   });
@@ -1466,53 +1438,15 @@
   $("btn-start").addEventListener("click", () => setT(0, { pause: true }));
   $("tl-open").addEventListener("click", () => { if (S.mode !== "project") exitMode(); setT(0, { pause: true }); });
   $("tl-end").addEventListener("click", () => { if (S.mode !== "project") exitMode(); const inf = R.info(P); setT(inf.opDur + inf.mainDur, { pause: true }); });
-
-  const track = $("tl-track");
-  track.addEventListener("pointerdown", (e) => {
-    if (e.target.closest(".tl-range") || e.target.closest(".tl-ins")) return;
-    if (S.mode === "insert") return;
-    if (!ctxClips().length) { toast(S.mode === "slide" ? "このスライドには動画がありません" : "まずクリップを追加してください"); return; }
-    const s = posToSrc(e);
-    if (S.place) { S.placeAt = s; seekSrc(s); renderModeBar(); renderTimeline(); return; }
-    const now = performance.now();
-    const dbl = now - S.lastDown < 400 && Math.abs(e.clientX - S.lastDownX) < 10;
-    S.lastDown = now; S.lastDownX = e.clientX;
-    track.setPointerCapture(e.pointerId);
-    S.drag = dbl ? { mode: "select", a: s, b: s } : { mode: "scrub" };
-    if (dbl) { if (S.pop) closePopover(); showSelection(s, s); }
-    seekSrc(s);
-  });
-  track.addEventListener("pointermove", (e) => {
-    if (!S.drag) return;
-    const s = posToSrc(e);
-    if (S.drag.mode === "select") { S.drag.b = s; showSelection(S.drag.a, s); }
-    seekSrc(s);
-  });
-  const endDrag = () => {
-    if (!S.drag) return;
-    const d = S.drag; S.drag = null;
-    if (d.mode === "select") {
-      const a = Math.min(d.a, d.b), b = Math.max(d.a, d.b);
-      if (b - a >= 0.15) openPopover({ id: store.uid("r"), type: null, start: a, end: b }, true);
-      else { showSelection(null); toast("ダブルクリックしたまま横にドラッグして範囲を選びます"); }
-    }
-  };
-  track.addEventListener("pointerup", endDrag);
-  track.addEventListener("pointercancel", endDrag);
-  $("tl-ranges").addEventListener("pointerdown", (e) => {
-    const el = e.target.closest(".tl-range");
-    if (!el) return;
-    e.stopPropagation();
-    const r = ctxRanges().find((x) => x.id === el.dataset.id);
-    if (r) { seekSrc(r.start); openPopover(r, false); }
-  });
+  bindTrack($("tl-track"));
   $("tl-inserts").addEventListener("pointerdown", (e) => { if (e.target.closest(".tl-ins")) e.stopPropagation(); });
 
   document.addEventListener("keydown", (e) => {
     const tag = (e.target.tagName || "").toLowerCase();
     if (tag === "input" || tag === "textarea" || tag === "select" || e.target.isContentEditable) return;
     if (S.fs) {
-      if (e.key === "Escape") { if (S.fs.crop) { S.fs.crop = false; renderFs(); } else closeFs(); return; }
+      if (e.key === "Escape") { if (S.pop) closePopover(); else if (S.fs.play) fsStop(); else if (S.fs.crop) { S.fs.crop = false; renderFs(); } else closeFs(); return; }
+      if (e.code === "Space") { e.preventDefault(); S.fs.play ? fsStop() : fsPlay("page"); return; }
       if ((e.key === "Delete" || e.key === "Backspace") && S.fs.selImg) { e.preventDefault(); fsDeleteImage(S.fs.selImg); }
       return;
     }
@@ -1523,7 +1457,7 @@
     if (e.key === "Escape" && S.picker) { closePicker(); return; }
     if (e.key === "Escape" && S.place) { finishPlace(false); return; }
     if (e.key === "Escape" && S.pop) closePopover();
-    if ((e.key === "Delete" || e.key === "Backspace") && S.pop && !S.pop.isNew) { const rs = ctxRanges(); const k = rs.findIndex((x) => x.id === S.pop.r.id); if (k !== -1) rs.splice(k, 1); save(); closePopover(); }
+    if ((e.key === "Delete" || e.key === "Backspace") && S.pop && !S.pop.isNew) { const rid = S.pop.r.id; closePopover(); deleteRange(rid); }
   });
 
   const wrap = $("canvas-wrap");
@@ -1536,8 +1470,7 @@
     const vids = files.filter((f) => !/^image\//.test(f.type));
     if (imgs.length) addImageFiles(imgs, imageTarget());
     if (vids.length) {
-      const ins = S.tab === "embed" ? selIns() : null;
-      if (ins && ins.type === "montage") addVideoFiles(vids, { kind: "montage", insId: ins.id });
+      if (S.fs && fsDeck()) addVideoFiles(vids, vids.length > 1 ? { kind: "montage-new", deckId: S.fs.deckId } : { kind: "page", deckId: S.fs.deckId, pageId: fsPage().id });
       else addVideoFiles(vids, { kind: "clip" });
     }
   });
