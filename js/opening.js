@@ -103,8 +103,11 @@ VC.opening = {
     };
   },
   isType(P, id) { return ((P && P.style) || "classic") === id; },
-  wordsList(s) { return (s.words || []).map((w) => String(w || "").trim()).filter(Boolean); },
-  wordsDur(s) { return this.wordsList(s).length * s.wordDur; },
+  wordsList(s) {
+    const src = Array.isArray(s.words) ? s.words : String(s.words || "").split(/[\s,、]+/);
+    return src.map((w) => String(w || "").trim()).filter(Boolean);
+  },
+  wordsDur(s) { return this.wordsList(s).length * (Number(s.wordDur) > 0 ? Number(s.wordDur) : 0.9); },
   sentencesList(s) { return (s.sentences || []).map((w) => String(w || "").trim()).filter(Boolean); },
   hasPurpose(s) { return !!String((s && s.purpose) || "").trim(); },
   transDur(s) { return this.hasPurpose(s) ? Math.max(0, Number(s.transDur) || 0) : 0; },
@@ -305,9 +308,11 @@ VC.opening = {
   drawClassic(ctx, W, H, t, s, colors, images) {
     const words = this.wordsList(s);
     const wd = this.wordsDur(s);
+    if (!isFinite(t) || t < 0) t = 0;
     if (t < wd && words.length) {
-      const i = Math.min(words.length - 1, Math.floor(t / s.wordDur));
-      this.drawWord(ctx, W, H, words[i], t - i * s.wordDur, s.wordDur, colors);
+      const per = Number(s.wordDur) > 0 ? Number(s.wordDur) : 0.9;
+      const i = Math.max(0, Math.min(words.length - 1, Math.floor(t / per) || 0));
+      this.drawWord(ctx, W, H, words[i], t - i * per, per, colors);
       return;
     }
     t -= wd;
@@ -332,8 +337,11 @@ VC.opening = {
   },
 
   drawWord(ctx, W, H, word, lt, dur, colors) {
-    const chars = [...word];
+    const chars = [...String(word == null ? "" : word)];
     const n = chars.length;
+    if (!n) return;
+    if (!(dur > 0)) dur = 0.9;
+    if (!isFinite(lt)) lt = 0;
     const per = (dur * 0.55) / n;
     const size = Math.round(H * 0.2);
     ctx.font = `800 ${size}px ${VC.text.FONT}`;
