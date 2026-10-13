@@ -1,0 +1,13 @@
+{
+  "name": "ReelCut",
+  "short_name": "ReelCut",
+  "description": "画面収録をCM風デモ動画に",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0f1218",
+  "theme_color": "#0f1218",
+  "icons": [
+    { "src": "icon.svg", "sizes": "192x192 512x512", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

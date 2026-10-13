@@ -121,6 +121,63 @@
     for (const ins of p.inserts || []) out.push(...INS.videoRefs(ins));
     return out;
   }
+  function allMediaIds(p) {
+    const ids = allVideoRefs(p).map((v) => v.id);
+    for (const im of (p.opening && p.opening.images) || []) ids.push(im.id);
+    for (const ins of p.inserts || []) for (const im of INS.imageRefs(ins)) ids.push(im.id);
+    return [...new Set(ids)];
+  }
+
+  // ---------- プロジェクト丸ごと保存／読み込み ----------
+  async function exportProjectFile() {
+    flushSave();
+    toast("プロジェクトファイルを作成中…");
+    try {
+      const r = await store.exportBundle(P, allMediaIds(P));
+      const name = (P.name || "project").replace(/[\\/:*?"<>|]+/g, "_");
+      const url = URL.createObjectURL(r.blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `${name}.rcpk`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      toast(`保存しました（メディア ${r.count}件・${(r.blob.size / 1048576).toFixed(0)}MB）${r.missing ? `　⚠ ${r.missing}件は読み込めないため含まれていません` : ""}`);
+    } catch (e) { toast(`保存に失敗：${e.message}`); }
+  }
+  async function importProjectFile(file) {
+    toast("読み込み中…（メディアをブラウザ内にコピーしています）");
+    try {
+      const proj = await store.importBundle(file);
+      const p = normalizeProject(proj);
+      p.id = store.uid("p");
+      p.name = (p.name || "動画") + "（読込）";
+      p.created_at = new Date().toISOString();
+      store.saveProject(p);
+      await switchProject(p.id);
+      S.storage = await store.estimate();
+      toast(`「${p.name}」を読み込みました`);
+    } catch (e) { toast(`読み込みに失敗：${e.message}`); }
+  }
+
+  // ---------- ストレージ保護の状態 ----------
+  function renderStorageBanner() {
+    const el = $("storage-banner");
+    if (!el) return;
+    if (S.persisted) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+    const est = S.storage;
+    const freeGB = est && est.quota ? ((est.quota - (est.usage || 0)) / 1073741824).toFixed(1) : null;
+    el.classList.remove("hidden");
+    el.innerHTML = `
+      <div><b>⚠ このサイトの保存データはブラウザに消される可能性があります</b>（保護なし${freeGB != null ? `・ブラウザが使える残り約 ${freeGB}GB` : ""}）。Chromeは空き容量が減ると、保護のないサイトの動画・画像を丸ごと削除します。</div>
+      <ol>
+        <li><b>アプリとしてインストール</b>：アドレスバー右端の「⊕ インストール」（または Chromeメニュー →「ReelCut をインストール」）→ 保護が自動で付きます</li>
+        <li>それが無ければ <b>このページをブックマーク</b>（⌘D）して開き直す</li>
+        <li>Macの空き容量を増やす（画面収録の元ファイルを整理）</li>
+        <li>念のため「⬇ 書き出し」タブの <b>💾 プロジェクトを丸ごと保存</b> でファイルにしておく</li>
+      </ol>
+      <span class="spacer"></span>
+      <button class="btn btn-sm" data-action="storage-recheck">↻ 状態を再確認</button>
+      <button class="btn btn-sm btn-primary" data-action="export-project">💾 丸ごと保存</button>`;
+  }
   async function closeProject(id) {
     const p = store.getProject(id);
     if (!p) return;
@@ -871,6 +928,12 @@
         <div class="field"><label>フレームレート</label><select data-bind="output.fps"><option value="30" ${P.output.fps == 30 ? "selected" : ""}>30 fps</option><option value="24" ${P.output.fps == 24 ? "selected" : ""}>24 fps</option><option value="60" ${P.output.fps == 60 ? "selected" : ""}>60 fps</option></select></div>
         <div class="field"><label>ファイル名</label><input type="text" data-bind="output.name" value="${esc(P.output.name)}"></div>
       </div>
+      <h3 style="margin-top:4px">💾 プロジェクトの保存（動画・画像込み）</h3>
+      <div class="row">
+        <button class="btn btn-sm btn-primary" data-action="export-project">💾 プロジェクトを丸ごと保存（.rcpk）</button>
+        <label class="btn btn-sm" for="file-backup" style="cursor:pointer">📂 .rcpk を読み込む</label>
+      </div>
+      <div class="note">編集内容と、使っている動画・画像をすべて1ファイルにしてMacに保存します。ブラウザがデータを消しても、このファイルから完全に復元できます。<b>区切りごとに保存しておくのがおすすめ</b>です。${S.persisted ? "<br>🔒 現在このサイトは保護されています。" : "<br>⚠ 現在このサイトは保護されていません（上部の案内を参照）。"}</div>
       ${num("先頭のタイトルカード（サムネ用）", "output.sting", P.output.sting, 0, 0.5, 0.02, "秒")}
       <div class="note">長さ ${TL.fmt(inf.total)}（タイトル ${inf.stingDur.toFixed(2)}s ＋ OP ${inf.openDur.toFixed(1)}s ＋ 本編 ${TL.fmt(inf.mainDur)}（埋め込み ${inf.insLayout.length}個）＋ ED ${inf.edDur.toFixed(1)}s）<br>${sz.w}×${sz.h}・${P.output.fps}fps・無音・${mp4 === false ? "webm" : "mp4 (H.264)"}</div>
       ${mp4 === false ? `<div class="warn">このブラウザは mp4 書き出しに対応していないため webm になります。X / LinkedIn に投稿するなら <b>Chrome</b> で書き出してください。</div>` : mp4 === true ? `<div class="small">✅ mp4（H.264）で書き出せます。</div>` : `<div class="small">対応確認中…</div>`}
@@ -1381,6 +1444,7 @@
     if (el.dataset && el.dataset.sb) { const pg = fsPage(); if (pg) renderFsPages(); return; }
     if (el.id === "file-video") { addVideoFiles(el.files, S.fileTarget); S.fileTarget = { kind: "clip" }; el.value = ""; }
     if (el.id === "file-image") { addImageFiles(el.files, S.imgTarget); S.imgTarget = { kind: "opening" }; el.value = ""; }
+    if (el.id === "file-backup") { if (el.files && el.files[0]) importProjectFile(el.files[0]); el.value = ""; }
   });
 
   document.addEventListener("click", async (e) => {
@@ -1431,6 +1495,13 @@
       case "media-reattach":
         if (el.dataset.kind === "video") { S.fileTarget = { kind: "reattach", id }; $("file-video").click(); }
         else { S.imgTarget = { kind: "reattach", id }; $("file-image").click(); }
+        break;
+      case "export-project": exportProjectFile(); break;
+      case "storage-recheck":
+        S.persisted = await store.persist();
+        S.storage = await store.estimate();
+        renderStorageBanner(); renderPanel();
+        toast(S.persisted ? "🔒 保護されています" : "まだ保護されていません。インストールかブックマークをしてから再確認してください");
         break;
       case "proj-switch": await switchProject(id); break;
       case "proj-new": await newProject(); break;
@@ -1575,8 +1646,10 @@
     renderTimeline(); renderModeBar();
     updateHUD();
     requestAnimationFrame(tick);
+    if ("serviceWorker" in navigator && location.protocol !== "file:") navigator.serviceWorker.register("sw.js").catch(() => {});
     S.persisted = await store.persist();
     S.storage = await store.estimate();
+    renderStorageBanner();
     await restoreMedia();
     renderPanel(); renderTimeline(); setT(0, { pause: true });
     const sz = sizeOf();

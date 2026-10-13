@@ -8,6 +8,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+JP:wght@400;500;700;900&family=Noto+Serif+JP:wght@500;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css">
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#0f1218">
   <script src="https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/build/mp4-muxer.min.js"></script>
   <script>
     window.addEventListener("error", function (e) {
@@ -33,6 +35,7 @@
   </header>
 
   <div class="proj-tabs" id="proj-tabs"></div>
+  <div id="storage-banner" class="storage-banner hidden"></div>
 
   <main class="layout">
     <section class="stage" id="stage">
@@ -91,6 +94,7 @@
   <div id="slide-fs" class="slide-fs hidden"></div>
   <input type="file" id="file-video" accept="video/*,.mov,.mp4,.webm,.m4v" multiple class="hidden">
   <input type="file" id="file-image" accept="image/*" multiple class="hidden">
+  <input type="file" id="file-backup" accept=".rcpk" class="hidden">
 
   <script src="js/store.js"></script>
   <script src="js/opening.js"></script>

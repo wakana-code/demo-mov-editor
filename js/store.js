@@ -62,6 +62,35 @@ VC.store = {
 
   uid(prefix) { return (prefix || "x") + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); },
 
+  // ---------- プロジェクト丸ごとの書き出し／読み込み（.rcpk：JSON＋メディアを1ファイルに） ----------
+  async exportBundle(project, ids) {
+    const metas = [], parts = [];
+    for (const id of ids) {
+      const b = await this.getBlob(id);
+      if (!b) continue;
+      metas.push({ id, size: b.size, type: b.type || "" });
+      parts.push(b);
+    }
+    const jb = new TextEncoder().encode(JSON.stringify({ app: "reelcut", version: 1, exported_at: new Date().toISOString(), project, blobs: metas }));
+    const head = new TextEncoder().encode(`RCPK1 ${jb.length}\n`);
+    return { blob: new Blob([head, jb, ...parts], { type: "application/octet-stream" }), count: metas.length, missing: ids.length - metas.length };
+  },
+  async importBundle(file) {
+    const h = await file.slice(0, 40).text();
+    const m = /^RCPK1 (\d+)\n/.exec(h);
+    if (!m) throw new Error("ReelCut のプロジェクトファイル（.rcpk）ではありません");
+    const hl = m[0].length, jl = Number(m[1]);
+    const json = JSON.parse(await file.slice(hl, hl + jl).text());
+    if (!json || json.app !== "reelcut" || !json.project) throw new Error("ファイルの内容が壊れています");
+    let off = hl + jl;
+    for (const b of json.blobs || []) {
+      const blob = await this.copyBlob(file.slice(off, off + b.size, b.type));
+      await this.putBlob(b.id, blob);
+      off += b.size;
+    }
+    return json.project;
+  },
+
   loadAll() {
     let all = {};
     try { all = JSON.parse(localStorage.getItem(this.PROJS)) || {}; } catch (e) { all = {}; }
