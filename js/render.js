@@ -37,11 +37,11 @@ VC.render = {
 
   // 再生中：本編の位置 pure に対応する出力時間。prevOut より前に終わった埋め込みだけを「通過済み」とみなし、
   // 今まさに地点を越えた埋め込みがあれば、その入口（outStart）を返す（＝飛ばさずに埋め込みへ入る）
-  playingOut(info, pure, prevOut) {
+  playingOut(info, pure, passed) {
     let o = pure;
     for (const x of info.insLayout || []) {
-      if (x.outEnd <= prevOut + 1e-3) { o += x.dur; continue; }   // 通過済み
-      if (x.base <= pure + 1e-6) return x.outStart;                 // 今越えた → 埋め込みへ
+      if (passed && passed.has(x.ins.id)) { o = Math.max(o + x.dur, x.outEnd); continue; }   // 通過済み（埋め込みの終わりより前には戻さない）
+      if (x.base <= pure + 1e-6) return x.outStart;                                           // 今越えた → 埋め込みへ
     }
     return o;
   },
@@ -59,8 +59,13 @@ VC.render = {
     if (T < info.opDur) {
       const local = T - info.stingDur;
       const loc = { phase: "opening", local, info };
-      const k = VC.opening.transitionK(P, local);
-      if (k != null && P.clips.length) { const f = this.firstMainClip(P, info); loc.trans = k; loc.clip = f.clip; loc.clipLocal = f.clipLocal; }
+      if (P.clips.length) {
+        // どの型でも、オープニング中に本編の最初の位置へ事前シークしておく（最初のコマが一瞬映るのを防ぐ）
+        const f = this.firstMainClip(P, info);
+        loc.clip = f.clip; loc.clipLocal = f.clipLocal; loc.pre = true;
+        const k = VC.opening.transitionK(P, local);
+        if (k != null) loc.trans = k;
+      }
       return loc;
     }
     const o = T - info.opDur;

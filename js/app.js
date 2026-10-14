@@ -29,6 +29,7 @@
     imgTarget: { kind: "opening" },
     fs: null,                              // 全画面スライドエディタ
     persisted: false, storage: null,
+    passed: new Set(), stall: 0,           // 再生中に通過した埋め込み／読み込み待ちの累積
   };
 
   function normalizeProject(saved) {
@@ -468,11 +469,21 @@
   }
 
   // ---------- playback（メイン） ----------
+  // 現在位置より前に終わる埋め込みを「通過済み」として記憶し直す（シーク時に呼ぶ）
+  function recomputePassed() {
+    S.passed = new Set();
+    S.stall = 0;
+    if (S.mode !== "project") return;
+    const inf = R.info(P);
+    const o = S.T - inf.opDur;
+    for (const x of inf.insLayout) if (x.outEnd <= o + 1e-3) S.passed.add(x.ins.id);
+  }
   function setT(t, opts) {
     opts = opts || {};
     const inf = info();
     S.T = Math.max(0, Math.min(inf.total, t));
     S.scrubSrc = null;
+    recomputePassed();
     if (opts.pause) pause();
     syncVideoToT(true);
     updateHUD();
@@ -485,6 +496,7 @@
     pause();
     S.T = inf.opDur + R.pureToOut(inf, TL.srcToOut(inf.segs, src));
     S.scrubSrc = src;
+    recomputePassed();
     const ca = TL.clipAt(clips, src);
     if (ca) { const v = runtime.videos[ca.clip.id]; if (v) switchActive(v, ca.local, false); }
     updateHUD();
@@ -501,20 +513,20 @@
       const st = INS.videoState(loc.ins, loc.local);
       const v = st ? runtime.videos[st.id] : null;
       if (!v) { if (S.active) S.active.pause(); return loc; }
-      if (S.active !== v || force || Math.abs(v.currentTime - st.time) > 0.3) switchActive(v, st.time, S.playing);
+      if (S.active !== v || force || (!v.seeking && Math.abs(v.currentTime - st.time) > 0.5)) switchActive(v, st.time, S.playing);
       try { v.playbackRate = Math.min(16, st.rate || 1); } catch (e) {}
       if (S.playing && v.paused && !v.ended) v.play().catch(() => {});
       return loc;
     }
-    if (loc.phase === "opening" && loc.trans != null && loc.clip) {
+    if (loc.phase === "opening" && loc.clip && (loc.trans != null || loc.pre)) {
       const tv = runtime.videos[loc.clip.id];
-      if (tv) { if (S.active && S.active !== tv) { try { S.active.pause(); } catch (e) {} } S.active = tv; tv.pause(); if (Math.abs(tv.currentTime - loc.clipLocal) > 0.05) tv.currentTime = loc.clipLocal; }
+      if (tv) { if (S.active && S.active !== tv) { try { S.active.pause(); } catch (e) {} } S.active = tv; tv.pause(); if (!tv.seeking && Math.abs(tv.currentTime - loc.clipLocal) > 0.05) tv.currentTime = loc.clipLocal; }
       return loc;
     }
     if (loc.phase !== "main" || !loc.clip) { if (S.active) S.active.pause(); return loc; }
     const v = runtime.videos[loc.clip.id];
     if (!v) return loc;
-    if (S.active !== v || force || Math.abs(v.currentTime - loc.clipLocal) > 0.3) switchActive(v, loc.clipLocal, S.playing);
+    if (S.active !== v || force || (!v.seeking && Math.abs(v.currentTime - loc.clipLocal) > 0.3)) switchActive(v, loc.clipLocal, S.playing);
     try { v.playbackRate = Math.min(16, loc.seg ? loc.seg.rate : 1); } catch (e) {}
     if (S.playing && v.paused && !v.ended) v.play().catch(() => {});
     return loc;
@@ -522,7 +534,7 @@
   function play() {
     const inf = info();
     if (inf.total <= 0) { toast("クリップを追加するか、オープニングを有効にしてください"); return; }
-    if (S.T >= inf.total - 0.02) S.T = 0;
+    if (S.T >= inf.total - 0.02) { S.T = 0; recomputePassed(); }
     S.scrubSrc = null; S.playing = true; S.lastTick = performance.now();
     $("btn-play").textContent = "⏸";
     syncVideoToT(true);
@@ -550,11 +562,15 @@
         let pure = null;
         if (vid.ended || vsrc >= loc.seg.end - 0.02) pure = loc.seg.outEnd + 0.001;
         else if (vsrc >= loc.seg.start - 0.05) pure = loc.seg.outStart + (Math.max(loc.seg.start, vsrc) - loc.seg.start) / loc.seg.rate;
-        if (pure != null) S.T = inf.opDur + R.playingOut(inf, pure, S.T - inf.opDur);
+        if (pure != null) S.T = inf.opDur + R.playingOut(inf, pure, S.passed);
         else S.T += dt;
         if (S.T >= inf.opDur + inf.mainDur) S.T = inf.opDur + inf.mainDur;
       } else if (loc.phase === "insert") {
-        S.T += dt;
+        S.passed.add(loc.ins.id);                       // 入った時点で「通過済み」にして、二度と戻らない
+        const st = INS.videoState(loc.ins, loc.local);
+        const v = st ? runtime.videos[st.id] : null;
+        const stalled = v && (v.seeking || v.readyState < 2);
+        if (!stalled || (S.stall += dt) > 1) { S.T += dt; S.stall = 0; }   // 動画の読み込み待ち中は時間を進めない（最大1秒）
         syncVideoToT(false);
       } else {
         S.T += dt;
