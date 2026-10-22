@@ -49,6 +49,11 @@
       style: VC.styles.get(saved.style).id,
     };
     p.colors = Object.assign(VC.styles.defaultColors(p.style), saved.colors || {});
+    p.body = saved.body === "slides" ? "slides" : "clips";
+    if (p.body === "slides" && !p.inserts.some((x) => x.main)) {
+      const md = INS.newDeck(); md.main = true; md.name = "本編スライド";
+      p.inserts.push(md);
+    }
     if (!Array.isArray(p.opening.images)) p.opening.images = [];
     if (!Array.isArray(p.opening.sentences)) p.opening.sentences = VC.opening.defaults().sentences;
     return p;
@@ -83,6 +88,28 @@
     wrap.classList.toggle("sq", sz.h === sz.w);
   }
   function deckById(id) { return P.inserts.find((x) => x.id === id) || null; }
+  function isSlides() { return P.body === "slides"; }
+  function mainDeck() { return P.inserts.find((x) => x.main) || null; }
+  function ensureMainDeck() {
+    let md = mainDeck();
+    if (!md) { md = INS.newDeck(); md.main = true; md.name = "本編スライド"; P.inserts.push(md); save(); }
+    return md;
+  }
+  function pageTitle(p) {
+    if (p.kind === "montage") return "🎞";
+    const lines = INS.parseHtml(p.html);
+    const t = lines.map((l) => l.map((r) => r.text).join("")).join(" ").trim();
+    return t ? t.slice(0, 18) : p.video ? `🎥 ${p.video.name}` : p.images.length ? "🖼 画像" : "（空）";
+  }
+  function setBody(kind) {
+    if (kind === P.body) return;
+    P.body = kind;
+    if (kind === "slides") ensureMainDeck();
+    S.T = 0; S.active = null; R.snaps = {};
+    save();
+    renderPanel(); renderTimeline(); renderModeBar(); setT(0, { pause: true });
+    toast(kind === "slides" ? "本編を「スライドだけ」にしました。「⛶ 本編スライドを編集」からページを作ってください" : "本編を「画面収録」にしました");
+  }
 
   // ---------- project tabs ----------
   function renderProjTabs() {
@@ -466,6 +493,7 @@
       return;
     }
     bar.classList.add("hidden"); bar.innerHTML = "";
+    if (isSlides()) { hint.innerHTML = `本編はスライドです：クリック：その時点へ　｜　編集は <b>⛶ 本編スライドを編集</b>（再生バー下）から`; return; }
     hint.innerHTML = `クリック：その時点へ　｜　<b>ダブルクリックしてそのままドラッグ</b>：範囲を選んで「字幕 / 倍速 / カット」　｜　範囲をクリック：編集　｜　紫のマーカー：埋め込み`;
   }
 
@@ -610,9 +638,10 @@
     $("tl-end").classList.toggle("active", loc.phase === "ending");
     $("tl-open").classList.toggle("off", !P.opening.enabled || S.mode !== "project");
     $("tl-end").classList.toggle("off", !P.ending.enabled || S.mode !== "project");
-    const pct = inf.srcTotal ? (src / inf.srcTotal) * 100 : 0;
+    let pct = inf.srcTotal ? (src / inf.srcTotal) * 100 : 0;
+    if (S.mode === "project" && isSlides()) pct = loc.phase === "insert" ? (inf.mainDur ? (loc.local / inf.mainDur) * 100 : 0) : loc.phase === "ending" ? 100 : 0;
     $("tl-playhead").style.left = `calc(${Math.max(0, Math.min(100, pct))}% - 1px)`;
-    $("stage-empty").classList.toggle("hidden", S.mode !== "project" || P.clips.length > 0 || P.opening.enabled || P.ending.enabled);
+    $("stage-empty").classList.toggle("hidden", S.mode !== "project" || isSlides() || P.clips.length > 0 || P.opening.enabled || P.ending.enabled);
   }
   function rangeBarHtml(ranges, total) {
     return ranges.map((r) => {
@@ -631,15 +660,28 @@
   function renderTimeline() {
     if (S.fs) { renderFsTimeline(); return; }
     const inf = info();
+    if (S.mode === "project" && isSlides()) {
+      const md = mainDeck();
+      const blocks = md ? INS.blocks(md) : [];
+      const tot = inf.mainDur || 1;
+      $("tl-clips").innerHTML = blocks.length && inf.mainDur
+        ? blocks.map((b, i) => `<div class="tl-clip" style="width:${(b.dur / tot) * 100}%" title="${esc(b.kind === "montage" ? "モンタージュ" : pageTitle(b.page))}">${i + 1}. ${esc(b.kind === "montage" ? "🎞 モンタージュ" : pageTitle(b.page))}</div>`).join("")
+        : `<div class="tl-clip" style="width:100%;align-items:center;justify-content:center;font-size:11px">本編スライドにページがありません（下の「⛶ 本編スライドを編集」から）</div>`;
+      $("tl-ranges").innerHTML = ""; $("tl-inserts").innerHTML = ""; $("range-list").innerHTML = "";
+      $("insert-list").innerHTML = `<div class="range-item"><span class="chip" style="background:#c4b5fd;color:#111">本編</span><span class="d">${esc(md ? INS.label(md) : "本編スライド")}　${inf.mainDur.toFixed(1)}秒</span><button class="btn btn-sm btn-primary" data-action="main-deck-open">⛶ 本編スライドを編集</button><button class="btn btn-sm" data-action="open-picker">🎛 本編の種類を変える</button></div>`;
+      $("tl-ghost").classList.add("hidden");
+      updateHUD(inf);
+      return;
+    }
     const clips = ctxClips(), ranges = ctxRanges();
     const total = inf.srcTotal || 1;
     if (S.mode === "insert") $("tl-clips").innerHTML = `<div class="tl-clip" style="width:100%;align-items:center;justify-content:center;font-size:11px">埋め込みのプレビュー中（「← 本編に戻る」で戻ります）</div>`;
     else $("tl-clips").innerHTML = clips.map((c) => `<div class="tl-clip" style="width:${(c.duration / total) * 100}%" title="${esc(c.name)}（${TL.fmt(c.duration)}）">${esc(c.name)}</div>`).join("");
     $("tl-ranges").innerHTML = rangeBarHtml(ranges, total);
-    $("tl-inserts").innerHTML = S.mode === "project" ? P.inserts.filter((x) => x.at != null).map((x) =>
+    $("tl-inserts").innerHTML = S.mode === "project" ? P.inserts.filter((x) => x.at != null && !x.main).map((x) =>
       `<div class="tl-ins ${S.place === x.id ? "selected" : ""}" data-action="ins-marker" data-id="${x.id}" style="left:${(Math.min(x.at, inf.srcTotal) / total) * 100}%" title="${esc(INS.label(x))}（${INS.duration(x).toFixed(1)}秒）">🧩</div>`).join("") : "";
     $("range-list").innerHTML = rangeListHtml(ranges);
-    const placed = S.mode === "project" ? P.inserts.filter((x) => x.at != null).sort((a, b) => a.at - b.at) : [];
+    const placed = S.mode === "project" ? P.inserts.filter((x) => x.at != null && !x.main).sort((a, b) => a.at - b.at) : [];
     $("insert-list").innerHTML = placed.map((x) => `<div class="range-item"><span class="t">元 ${TL.fmtMs(x.at)} の直前</span><span class="chip" style="background:#c4b5fd;color:#111">埋め込み</span><span class="d">${esc(INS.label(x))}　${INS.duration(x).toFixed(1)}秒</span><button class="btn btn-sm" data-action="ins-preview" data-id="${x.id}">▶</button><button class="btn btn-sm" data-action="ins-open" data-id="${x.id}">編集</button><button class="btn btn-sm" data-action="ins-place" data-id="${x.id}">📍</button><button class="btn btn-sm btn-danger" data-action="ins-unplace" data-id="${x.id}">外す</button></div>`).join("");
     const ghost = $("tl-ghost");
     if (S.place && S.placeAt != null) { ghost.classList.remove("hidden"); ghost.style.left = `${(Math.min(S.placeAt, inf.srcTotal) / total) * 100}%`; }
@@ -666,6 +708,13 @@
     track.addEventListener("pointerdown", (e) => {
       if (e.target.closest(".tl-range") || e.target.closest(".tl-ins")) return;
       if (!S.fs && S.mode === "insert") return;
+      if (!S.fs && S.mode === "project" && isSlides()) {
+        const rect = track.getBoundingClientRect();
+        const f = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        const inf = info();
+        setT(inf.opDur + f * inf.mainDur, { pause: true });
+        return;
+      }
       if (!ctxClips().length) { toast(S.fs ? "このページには動画がありません" : "まずクリップを追加してください"); return; }
       const s = posToSrc(e);
       if (!S.fs && S.place) { S.placeAt = s; seekSrc(s); renderModeBar(); renderTimeline(); return; }
@@ -864,6 +913,14 @@
   }
   function panelClips() {
     const total = TL.totalSource(P.clips);
+    if (isSlides()) {
+      const md = mainDeck();
+      return `
+        <h3>💬 本編（スライドだけ） <span class="small">${md ? `${md.pages.length}ページ・${INS.duration(md).toFixed(1)}秒` : ""}</span></h3>
+        <div class="row"><button class="btn btn-primary" data-action="main-deck-open">⛶ 本編スライドを編集</button><button class="btn btn-sm" data-action="open-picker">🎛 本編の種類を変える</button></div>
+        <div class="note">この動画の本編はスライドです。全画面エディタでページ（文字・画像・動画・モンタージュ）を作ると、OP → スライド → ED の順で再生・書き出しされます。<br>「画面収録」に戻しても、追加済みのクリップ（${P.clips.length}本）は残っています。</div>
+        ${mediaStatusHtml()}`;
+    }
     return `
       <h3>📹 クリップ（本編） <span class="small">${P.clips.length}本・${TL.fmt(total)}</span></h3>
       <div class="drop" data-action="add-videos">＋ 画面収録を追加（.mov / .mp4、複数可）<br><span class="small">ここにドラッグ＆ドロップでもOK</span></div>
@@ -920,16 +977,30 @@
       <div class="grid2">${num("アプリ名の1文字の速さ", "ending.charDur", e.charDur, 0.03, 0.25, 0.01, "秒")}${num("表示したままの時間", "ending.hold", e.hold, 0.5, 5, 0.1, "秒")}</div>`;
   }
   function panelEmbed() {
+    const md = mainDeck();
+    const list = P.inserts.filter((x) => !x.main);
     return `
-      <h3>🧩 埋め込み <span class="small">${P.inserts.length}個</span></h3>
+      <h3>🧩 埋め込み <span class="small">${list.length}個</span></h3>
+      ${isSlides() && md ? `
+      <div class="ins-item" style="border-color:#c4b5fd">
+        <span class="chip" style="background:#c4b5fd;color:#111">本編</span>
+        <span class="n" title="${esc(INS.label(md))}">${esc(INS.label(md))}</span>
+        <span class="small">${INS.duration(md).toFixed(1)}秒</span>
+        <button class="btn btn-sm btn-primary" data-action="main-deck-open">⛶ 編集</button>
+        <button class="btn btn-sm" data-action="ins-preview" data-id="${md.id}">▶</button>
+        <button class="btn btn-sm" data-action="ins-rename" data-id="${md.id}" title="名前を付ける">✏</button>
+        <button class="btn btn-sm ${S.copyIns === md.id ? "btn-primary" : ""}" data-action="ins-copy-toggle" data-id="${md.id}" title="別のプロジェクトへコピー／複製">⧉</button>
+        ${S.copyIns === md.id ? `<div class="row" style="width:100%;margin-top:4px"><span class="small">コピー先</span><select id="ins-copy-target" style="flex:1;padding:6px 8px;border:1px solid var(--line-2);border-radius:7px;background:var(--bg-2);color:var(--text);font:inherit;font-size:12px">${store.list().map((p) => `<option value="${p.id}" ${p.id === P.id ? "selected" : ""}>${esc(p.name || "動画")}${p.id === P.id ? "（このプロジェクト内に複製）" : ""}</option>`).join("")}</select><button class="btn btn-sm btn-primary" data-action="ins-copy-run" data-id="${md.id}">コピー実行</button></div>` : ""}
+      </div>
+      <div class="note">本編がスライドのときは、他の埋め込みを本編に配置することはできません（本編スライドにページとして作ってください）。</div>` : ""}
       <div class="row"><button class="btn btn-sm btn-primary" data-action="ins-new">＋ 新しい埋め込みを作る（全画面エディタ）</button></div>
-      ${P.inserts.length ? P.inserts.map((x) => `
+      ${list.length ? list.map((x) => `
       <div class="ins-item">
         <span class="n" title="${esc(INS.label(x))}">${esc(INS.label(x))}</span>
         <span class="small">${x.at != null ? `📍 元 ${TL.fmtMs(x.at)}` : "未配置"}　${INS.duration(x).toFixed(1)}秒</span>
         <button class="btn btn-sm btn-primary" data-action="ins-open" data-id="${x.id}">⛶ 開く</button>
         <button class="btn btn-sm" data-action="ins-preview" data-id="${x.id}">▶</button>
-        <button class="btn btn-sm" data-action="ins-place" data-id="${x.id}">📍</button>
+        ${isSlides() ? "" : `<button class="btn btn-sm" data-action="ins-place" data-id="${x.id}">📍</button>`}
         <button class="btn btn-sm" data-action="ins-rename" data-id="${x.id}" title="名前を付ける">✏</button>
         <button class="btn btn-sm ${S.copyIns === x.id ? "btn-primary" : ""}" data-action="ins-copy-toggle" data-id="${x.id}" title="別のプロジェクトへコピー／複製">⧉</button>
         <button class="btn btn-sm btn-danger" data-action="ins-del" data-id="${x.id}">✕</button>
@@ -975,6 +1046,7 @@
     if (!d) return;
     if (S.fs) closeFs(true);
     if (S.mode !== "project") exitMode();
+    if (d.main && isSlides()) { const inf = R.info(P); setT(inf.opDur, { pause: true }); play(); return; }
     if (d.at != null) {
       const inf = R.info(P);
       const il = inf.insLayout.find((x) => x.ins.id === id);
@@ -986,6 +1058,7 @@
   function startPlace(id) {
     if (S.fs) closeFs(true);
     if (S.mode !== "project") exitMode();
+    if (isSlides()) { toast("本編がスライドのときは配置できません。本編スライドにページとして作るか、「⧉」で本編スライドへコピーしてください"); return; }
     if (!P.clips.length) { toast("先にクリップ（本編）を追加してください"); return; }
     const d = deckById(id);
     S.place = id; S.placeAt = d && d.at != null ? d.at : null;
@@ -1065,6 +1138,7 @@
   }
   function deleteDeck(id) {
     const x = deckById(id);
+    if (x && x.main && isSlides()) { toast("本編スライドは削除できません（本編の種類を「画面収録」に変えると削除できます）"); return; }
     if (!x || !confirm(`${INS.label(x)} を削除しますか？`)) return;
     for (const v of INS.videoRefs(x)) { delete runtime.videos[v.id]; store.delBlob(v.id); }
     for (const im of INS.imageRefs(x)) { delete runtime.images[im.id]; store.delBlob(im.id); }
@@ -1410,7 +1484,12 @@
     const el = $("style-picker");
     el.classList.remove("hidden");
     el.innerHTML = `<div class="picker-body">
-      <div class="row" style="align-items:flex-start"><div><h2>動画の型を選ぶ</h2><p class="lead">OPとEDが自動で流れます。クリックで選択。後からオープニング／エンディングのタブで変えられます。</p></div><span class="spacer"></span><button class="btn" data-action="picker-close">閉じる</button></div>
+      <div class="row" style="align-items:flex-start"><div><h2>本編の種類</h2><p class="lead">画面収録を編集するか、スライドだけで作るか。後から変えられます（どちらのデータも消えません）。</p></div><span class="spacer"></span><button class="btn" data-action="picker-close">閉じる</button></div>
+      <div class="body-cards">
+        <div class="body-card ${!isSlides() ? "current" : ""}" data-action="body-choose" data-body="clips"><span class="ico">📹</span><div><h4>画面収録 ${!isSlides() ? `<span class="chip">現在</span>` : ""}</h4><p>画面収録を追加して、再生バーで字幕・倍速・カット。説明は埋め込みスライドとして挿入。</p></div></div>
+        <div class="body-card ${isSlides() ? "current" : ""}" data-action="body-choose" data-body="slides"><span class="ico">💬</span><div><h4>スライドだけ ${isSlides() ? `<span class="chip">現在</span>` : ""}</h4><p>文字・画像・動画・モンタージュのページを並べて1本の動画に。OP → スライド → ED。</p></div></div>
+      </div>
+      <h2 style="font-size:18px">OP / ED の型</h2><p class="lead">OPとEDが自動で流れます。クリックで選択。後からオープニング／エンディングのタブで変えられます。</p>
       <div class="style-cards">${VC.styles.list.map((st) => `
         <div class="style-card ${st.id === P.style ? "current" : ""}" data-action="style-choose" data-id="${st.id}">
           <div class="pv"><div><div class="lbl">オープニング</div><canvas data-pv="op" data-style="${st.id}" width="480" height="270"></canvas></div><div><div class="lbl">エンディング</div><canvas data-pv="ed" data-style="${st.id}" width="480" height="270"></canvas></div></div>
@@ -1599,6 +1678,14 @@
       case "proj-close": e.stopPropagation(); await closeProject(id); break;
       case "open-picker": openPicker(); break;
       case "picker-close": closePicker(); break;
+      case "body-choose": {
+        const kind = el.dataset.body;
+        closePicker();
+        setBody(kind);
+        if (kind === "slides" && isSlides()) openFs(ensureMainDeck().id);
+        break;
+      }
+      case "main-deck-open": if (S.mode !== "project") exitMode(); openFs(ensureMainDeck().id); break;
       case "style-choose": chooseStyle(id); break;
       case "colors-reset": P.colors = VC.styles.defaultColors(P.style); save(); renderPanel(); toast("色・フォントを既定に戻しました"); break;
       case "mode-exit": exitMode(); break;

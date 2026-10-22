@@ -5,16 +5,25 @@ VC.render = {
   snaps: {},
   _inc: null,
 
+  isSlidesBody(P) { return P && P.body === "slides"; },
+  mainDeck(P) { return (P && P.inserts || []).find((x) => x.main) || null; },
   info(P) {
     const stingDur = VC.sting.duration(P);
     const openDur = VC.opening.duration(P);
-    const segs = VC.timeline.segments(P.clips, P.ranges);
-    const outDur = VC.timeline.outputDuration(segs);
     const edDur = VC.ending.duration(P);
     const opDur = stingDur + openDur;
+    if (this.isSlidesBody(P)) {
+      // 本編＝スライドだけ
+      const md = this.mainDeck(P);
+      const d = md ? VC.inserts.duration(md) : 0;
+      const insLayout = md ? [{ ins: md, dur: d, base: 0, outStart: 0, outEnd: d }] : [];
+      return { stingDur, openDur, opDur, segs: [], outDur: 0, insLayout, mainDur: d, edDur, total: opDur + d + edDur, srcTotal: 0, slides: true };
+    }
+    const segs = VC.timeline.segments(P.clips, P.ranges);
+    const outDur = VC.timeline.outputDuration(segs);
     const srcTotal = VC.timeline.totalSource(P.clips);
     let extra = 0;
-    const insLayout = (P.inserts || []).filter((x) => x.at != null).slice().sort((a, b) => a.at - b.at).map((ins) => {
+    const insLayout = (P.inserts || []).filter((x) => x.at != null && !x.main).slice().sort((a, b) => a.at - b.at).map((ins) => {
       const dur = VC.inserts.duration(ins);
       const base = VC.timeline.srcToOut(segs, Math.max(0, Math.min(ins.at, srcTotal)));
       const outStart = base + extra;
@@ -59,7 +68,7 @@ VC.render = {
     if (T < info.opDur) {
       const local = T - info.stingDur;
       const loc = { phase: "opening", local, info };
-      if (P.clips.length) {
+      if (P.clips.length && !this.isSlidesBody(P)) {
         // どの型でも、オープニング中に本編の最初の位置へ事前シークしておく（最初のコマが一瞬映るのを防ぐ）
         const f = this.firstMainClip(P, info);
         loc.clip = f.clip; loc.clipLocal = f.clipLocal; loc.pre = true;
@@ -100,7 +109,8 @@ VC.render = {
     if (loc.phase === "opening") {
       if (loc.trans != null) {
         const v = loc.clip ? runtime.videos[loc.clip.id] : null;
-        const drawMain = v && v.videoWidth ? (c, w, h) => this.drawVideo(c, w, h, v) : null;
+        let drawMain = v && v.videoWidth ? (c, w, h) => this.drawVideo(c, w, h, v) : null;
+        if (!drawMain && this.isSlidesBody(P)) { const md = this.mainDeck(P); if (md) drawMain = (c, w, h) => VC.inserts.draw(c, w, h, md, 0, P, runtime); }
         VC.opening.drawTransition(ctx, W, H, loc.trans, P, drawMain);
         return;
       }
