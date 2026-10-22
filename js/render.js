@@ -23,7 +23,7 @@ VC.render = {
     const outDur = VC.timeline.outputDuration(segs);
     const srcTotal = VC.timeline.totalSource(P.clips);
     let extra = 0;
-    const insLayout = (P.inserts || []).filter((x) => x.at != null && !x.main).slice().sort((a, b) => a.at - b.at).map((ins) => {
+    const insLayout = (P.inserts || []).filter((x) => x.at != null).slice().sort((a, b) => a.at - b.at).map((ins) => {
       const dur = VC.inserts.duration(ins);
       const base = VC.timeline.srcToOut(segs, Math.max(0, Math.min(ins.at, srcTotal)));
       const outStart = base + extra;

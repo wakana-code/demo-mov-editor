@@ -31,6 +31,8 @@
     persisted: false, storage: null,
     passed: new Set(), stall: 0,           // 再生中に通過した埋め込み／読み込み待ちの累積
     copyIns: null,                         // 「⧉ コピー」でコピー先を選んでいる埋め込み
+    mergeIns: null,                        // 「🔗 結合」で結合元を選んでいる埋め込み
+    pullProj: null,                        // 「📥 取り込む」で選んでいるプロジェクト
   };
 
   function normalizeProject(saved) {
@@ -678,10 +680,10 @@
     if (S.mode === "insert") $("tl-clips").innerHTML = `<div class="tl-clip" style="width:100%;align-items:center;justify-content:center;font-size:11px">埋め込みのプレビュー中（「← 本編に戻る」で戻ります）</div>`;
     else $("tl-clips").innerHTML = clips.map((c) => `<div class="tl-clip" style="width:${(c.duration / total) * 100}%" title="${esc(c.name)}（${TL.fmt(c.duration)}）">${esc(c.name)}</div>`).join("");
     $("tl-ranges").innerHTML = rangeBarHtml(ranges, total);
-    $("tl-inserts").innerHTML = S.mode === "project" ? P.inserts.filter((x) => x.at != null && !x.main).map((x) =>
+    $("tl-inserts").innerHTML = S.mode === "project" ? P.inserts.filter((x) => x.at != null).map((x) =>
       `<div class="tl-ins ${S.place === x.id ? "selected" : ""}" data-action="ins-marker" data-id="${x.id}" style="left:${(Math.min(x.at, inf.srcTotal) / total) * 100}%" title="${esc(INS.label(x))}（${INS.duration(x).toFixed(1)}秒）">🧩</div>`).join("") : "";
     $("range-list").innerHTML = rangeListHtml(ranges);
-    const placed = S.mode === "project" ? P.inserts.filter((x) => x.at != null && !x.main).sort((a, b) => a.at - b.at) : [];
+    const placed = S.mode === "project" ? P.inserts.filter((x) => x.at != null).sort((a, b) => a.at - b.at) : [];
     $("insert-list").innerHTML = placed.map((x) => `<div class="range-item"><span class="t">元 ${TL.fmtMs(x.at)} の直前</span><span class="chip" style="background:#c4b5fd;color:#111">埋め込み</span><span class="d">${esc(INS.label(x))}　${INS.duration(x).toFixed(1)}秒</span><button class="btn btn-sm" data-action="ins-preview" data-id="${x.id}">▶</button><button class="btn btn-sm" data-action="ins-open" data-id="${x.id}">編集</button><button class="btn btn-sm" data-action="ins-place" data-id="${x.id}">📍</button><button class="btn btn-sm btn-danger" data-action="ins-unplace" data-id="${x.id}">外す</button></div>`).join("");
     const ghost = $("tl-ghost");
     if (S.place && S.placeAt != null) { ghost.classList.remove("hidden"); ghost.style.left = `${(Math.min(S.placeAt, inf.srcTotal) / total) * 100}%`; }
@@ -977,6 +979,54 @@
       <div class="grid2">${num("アプリ名の1文字の速さ", "ending.charDur", e.charDur, 0.03, 0.25, 0.01, "秒")}${num("表示したままの時間", "ending.hold", e.hold, 0.5, 5, 0.1, "秒")}</div>`;
   }
   function panelEmbed() {
+    const projects = store.list();
+    const selStyle = `padding:6px 8px;border:1px solid var(--line-2);border-radius:7px;background:var(--bg-2);color:var(--text);font:inherit;font-size:12px`;
+    const row = (x) => {
+      const isMain = !!x.main;
+      const canPlace = !isSlides();
+      const others = P.inserts.filter((y) => y.id !== x.id);
+      return `
+      <div class="ins-item" style="${isMain && isSlides() ? "border-color:#c4b5fd" : ""}">
+        ${isMain ? `<span class="chip" style="background:#c4b5fd;color:#111">${isSlides() ? "本編" : "本編用"}</span>` : ""}
+        <span class="n" title="${esc(INS.label(x))}">${esc(INS.label(x))}</span>
+        <span class="small">${isMain && isSlides() ? "" : x.at != null ? `📍 元 ${TL.fmtMs(x.at)}` : "未配置"}　${INS.duration(x).toFixed(1)}秒</span>
+        <button class="btn btn-sm btn-primary" data-action="ins-open" data-id="${x.id}">⛶ 開く</button>
+        <button class="btn btn-sm" data-action="ins-preview" data-id="${x.id}">▶</button>
+        ${canPlace ? `<button class="btn btn-sm" data-action="ins-place" data-id="${x.id}" title="本編に配置">📍</button>` : ""}
+        <button class="btn btn-sm" data-action="ins-rename" data-id="${x.id}" title="名前を付ける">✏</button>
+        <button class="btn btn-sm ${S.copyIns === x.id ? "btn-primary" : ""}" data-action="ins-copy-toggle" data-id="${x.id}" title="別のプロジェクトへコピー／複製">⧉</button>
+        <button class="btn btn-sm ${S.mergeIns === x.id ? "btn-primary" : ""}" data-action="ins-merge-toggle" data-id="${x.id}" title="他の埋め込みを後ろに繋げる" ${others.length ? "" : "disabled"}>🔗</button>
+        ${isSlides() && !isMain ? `<button class="btn btn-sm" data-action="ins-make-main" data-id="${x.id}" title="これを本編スライドにする">本編にする</button>` : ""}
+        <button class="btn btn-sm btn-danger" data-action="ins-del" data-id="${x.id}">✕</button>
+        ${S.copyIns === x.id ? `
+        <div class="row" style="width:100%;margin-top:4px">
+          <span class="small">コピー先</span>
+          <select id="ins-copy-target" style="flex:1;${selStyle}">${projects.map((p) => `<option value="${p.id}" ${p.id === P.id ? "selected" : ""}>${esc(p.name || "動画")}${p.id === P.id ? "（このプロジェクト内に複製）" : ""}</option>`).join("")}</select>
+          <button class="btn btn-sm btn-primary" data-action="ins-copy-run" data-id="${x.id}">コピー実行</button>
+        </div>` : ""}
+        ${S.mergeIns === x.id ? `
+        <div class="row" style="width:100%;margin-top:4px">
+          <span class="small">この後ろに繋げる埋め込み</span>
+          <select id="ins-merge-src" style="flex:1;${selStyle}">${others.map((y) => `<option value="${y.id}">${esc(INS.label(y))}（${y.pages.length}ページ）</option>`).join("")}</select>
+          <button class="btn btn-sm btn-primary" data-action="ins-merge-run" data-id="${x.id}" data-keep="0">繋げる（元は削除）</button>
+          <button class="btn btn-sm" data-action="ins-merge-run" data-id="${x.id}" data-keep="1">複製して繋げる（元は残す）</button>
+        </div>` : ""}
+      </div>`;
+    };
+    const sorted = P.inserts.slice().sort((a, b) => (b.main ? 1 : 0) - (a.main ? 1 : 0));
+    const pullSrc = S.pullProj ? store.getProject(S.pullProj) : null;
+    const pullDecks = pullSrc && Array.isArray(pullSrc.inserts) ? pullSrc.inserts.map((x) => INS.normalize(x)).filter(Boolean) : [];
+    return `
+      <h3>🧩 埋め込み <span class="small">${P.inserts.length}個</span></h3>
+      <div class="row"><button class="btn btn-sm btn-primary" data-action="ins-new">＋ 新しい埋め込みを作る（全画面エディタ）</button>${isSlides() ? `<button class="btn btn-sm" data-action="open-picker">🎛 本編の種類を変える</button>` : ""}</div>
+      ${isSlides() ? `<div class="note">本編がスライドのときは、他の埋め込みを本編に配置できません。「🔗」で本編スライドの後ろに繋げるか、「本編にする」で入れ替えてください。</div>` : ""}
+      ${sorted.length ? sorted.map(row).join("") : `<div class="note">文字・画像・動画のページや、複数動画のモンタージュを全画面エディタで作り、本編の好きな位置に埋め込めます。「📍」で再生バーの位置をクリック → 決定。</div>`}
+      <h3 style="margin-top:4px">📥 他のプロジェクトから取り込む</h3>
+      <div class="row"><select id="pull-proj" style="flex:1;${selStyle}"><option value="">（プロジェクトを選択）</option>${projects.filter((p) => p.id !== P.id).map((p) => `<option value="${p.id}" ${S.pullProj === p.id ? "selected" : ""}>${esc(p.name || "動画")}</option>`).join("")}</select></div>
+      ${pullSrc ? (pullDecks.length ? pullDecks.map((x) => `<div class="ins-item"><span class="n">${esc(INS.label(x))}</span><span class="small">${INS.duration(x).toFixed(1)}秒</span><button class="btn btn-sm btn-primary" data-action="pull-run" data-pid="${pullSrc.id}" data-id="${x.id}">📥 取り込む</button></div>`).join("") : `<div class="small">「${esc(pullSrc.name)}」に埋め込みはありません</div>`) : ""}
+      ${Object.keys(runtime.missing || {}).length ? mediaStatusHtml() : ""}`;
+  }
+  function panelEmbedOld() {
     const md = mainDeck();
     const list = P.inserts.filter((x) => !x.main);
     return `
@@ -1097,7 +1147,7 @@
   // デッキを完全に複製（動画・画像も別IDでコピー）。loadNow=true なら今すぐ再生できる状態にする
   async function cloneDeck(src, loadNow) {
     const c = JSON.parse(JSON.stringify(src));
-    c.id = store.uid("ins"); c.at = null;
+    c.id = store.uid("ins"); c.at = null; delete c.main;
     const gmap = {}, groups = {};
     for (const gid in c.groups || {}) { const n = store.uid("g"); gmap[gid] = n; groups[n] = c.groups[gid]; }
     c.groups = groups;
@@ -1128,23 +1178,77 @@
     const tp = toSelf ? P : store.getProject(targetId);
     if (!tp) { toast("コピー先が見つかりません"); return; }
     toast("コピー中…（動画・画像も複製しています）");
-    const r = await cloneDeck(src, toSelf);
-    r.deck.name = src.name ? `${src.name}（コピー）` : "";
-    if (toSelf) { P.inserts.push(r.deck); save(); }
-    else { tp.inserts = Array.isArray(tp.inserts) ? tp.inserts : []; tp.inserts.push(r.deck); store.saveProject(tp); }
-    S.copyIns = null;
-    renderPanel();
-    toast(`${toSelf ? "このプロジェクト内に複製しました" : `「${tp.name}」にコピーしました（タブを切り替えると使えます）`}${r.missing ? `　⚠ 読み込めない動画・画像 ${r.missing}件は含まれていません` : ""}`);
+    try {
+      const r = await cloneDeck(src, toSelf);
+      r.deck.name = src.name ? `${src.name}（コピー）` : "";
+      if (toSelf) { P.inserts.push(r.deck); save(); }
+      else {
+        const fresh = store.getProject(targetId) || tp;
+        fresh.inserts = Array.isArray(fresh.inserts) ? fresh.inserts : [];
+        fresh.inserts.push(r.deck);
+        store.saveProject(fresh);
+      }
+      S.copyIns = null;
+      renderPanel();
+      toast(`${toSelf ? "このプロジェクト内に複製しました" : `「${tp.name}」にコピーしました（タブを切り替えると使えます）`}${r.missing ? `　⚠ 読み込めない動画・画像 ${r.missing}件は含まれていません` : ""}`);
+    } catch (e) { console.error(e); toast(`コピーに失敗：${e.message}`); }
+  }
+  // 他のプロジェクトの埋め込みを、今のプロジェクトへ複製して取り込む
+  async function pullDeckFrom(projId, deckId) {
+    const sp = store.getProject(projId);
+    const src = sp && Array.isArray(sp.inserts) ? sp.inserts.map((x) => INS.normalize(x)).find((x) => x && x.id === deckId) : null;
+    if (!src) { toast("取り込み元が見つかりません"); return; }
+    toast("取り込み中…（動画・画像も複製しています）");
+    try {
+      const r = await cloneDeck(src, true);
+      r.deck.name = src.name || "";
+      P.inserts.push(r.deck);
+      save(); renderPanel(); renderTimeline();
+      toast(`「${sp.name}」から ${INS.label(r.deck)} を取り込みました${r.missing ? `　⚠ 読み込めない動画・画像 ${r.missing}件は含まれていません` : ""}`);
+    } catch (e) { console.error(e); toast(`取り込みに失敗：${e.message}`); }
+  }
+  // 結合：src のページを target の後ろに繋げる（keepSrc=false なら src は削除、true なら複製して繋げる）
+  async function mergeDecks(targetId, srcId, keepSrc) {
+    const target = deckById(targetId), src = deckById(srcId);
+    if (!target || !src || target === src) return;
+    try {
+      let pages, groups;
+      if (keepSrc) { const r = await cloneDeck(src, true); pages = r.deck.pages; groups = r.deck.groups; }
+      else { pages = src.pages; groups = src.groups; }
+      Object.assign(target.groups, groups);
+      target.pages.push(...pages);
+      if (!keepSrc) {
+        const wasMain = !!src.main;
+        P.inserts = P.inserts.filter((y) => y.id !== srcId);
+        if (S.fs && S.fs.deckId === srcId) closeFs(true);
+        if (wasMain && isSlides()) { target.main = true; target.at = null; }
+      }
+      S.mergeIns = null;
+      R.snaps = {};
+      save(); renderPanel(); renderTimeline(); setT(Math.min(S.T, info().total), { pause: true });
+      toast(`${INS.label(target)} に ${pages.length}ページを繋げました${keepSrc ? "（元は残しています）" : ""}`);
+    } catch (e) { console.error(e); toast(`結合に失敗：${e.message}`); }
+  }
+  function makeMain(id) {
+    const x = deckById(id);
+    if (!x) return;
+    for (const y of P.inserts) y.main = false;
+    x.main = true; x.at = null;
+    S.T = 0; R.snaps = {};
+    save(); renderPanel(); renderTimeline(); setT(0, { pause: true });
+    toast(`${INS.label(x)} を本編スライドにしました`);
   }
   function deleteDeck(id) {
     const x = deckById(id);
-    if (x && x.main && isSlides()) { toast("本編スライドは削除できません（本編の種類を「画面収録」に変えると削除できます）"); return; }
-    if (!x || !confirm(`${INS.label(x)} を削除しますか？`)) return;
+    if (!x || !confirm(`${INS.label(x)} を削除しますか？${x.main && isSlides() ? "\n（本編スライドです。削除すると、空の本編スライドが作られます）" : ""}`)) return;
     for (const v of INS.videoRefs(x)) { delete runtime.videos[v.id]; store.delBlob(v.id); }
     for (const im of INS.imageRefs(x)) { delete runtime.images[im.id]; store.delBlob(im.id); }
     if (S.fs && S.fs.deckId === id) closeFs(true);
     if (S.modeIns === id) exitMode();
     P.inserts = P.inserts.filter((y) => y.id !== id);
+    if (S.copyIns === id) S.copyIns = null;
+    if (S.mergeIns === id) S.mergeIns = null;
+    if (isSlides()) ensureMainDeck();
     save(); renderPanel(); renderTimeline(); setT(Math.min(S.T, info().total), { pause: true });
   }
 
@@ -1615,6 +1719,7 @@
     if (el.id === "file-video") { addVideoFiles(el.files, S.fileTarget); S.fileTarget = { kind: "clip" }; el.value = ""; }
     if (el.id === "file-image") { addImageFiles(el.files, S.imgTarget); S.imgTarget = { kind: "opening" }; el.value = ""; }
     if (el.id === "file-backup") { if (el.files && el.files[0]) importProjectFile(el.files[0]); el.value = ""; }
+    if (el.id === "pull-proj") { S.pullProj = el.value || null; renderPanel(); }
   });
 
   document.addEventListener("click", async (e) => {
@@ -1710,8 +1815,12 @@
       case "ins-unplace": { const x = deckById(id); if (x) { x.at = null; save(); renderPanel(); renderTimeline(); setT(Math.min(S.T, info().total), { pause: true }); toast("配置を外しました（埋め込み自体は残ります）"); } break; }
       case "ins-del": deleteDeck(id); break;
       case "ins-rename": renameDeck(id); break;
-      case "ins-copy-toggle": S.copyIns = S.copyIns === id ? null : id; renderPanel(); break;
+      case "ins-copy-toggle": S.copyIns = S.copyIns === id ? null : id; S.mergeIns = null; renderPanel(); break;
       case "ins-copy-run": await copyDeckTo(id, val("ins-copy-target") || P.id); break;
+      case "ins-merge-toggle": S.mergeIns = S.mergeIns === id ? null : id; S.copyIns = null; renderPanel(); break;
+      case "ins-merge-run": { const sid = val("ins-merge-src"); if (!sid) { toast("繋げる埋め込みを選んでください"); break; } await mergeDecks(id, sid, el.dataset.keep === "1"); break; }
+      case "ins-make-main": makeMain(id); break;
+      case "pull-run": await pullDeckFrom(el.dataset.pid, id); break;
       case "place-end": S.placeAt = R.info(P).srcTotal; renderModeBar(); renderTimeline(); break;
       case "place-ok": finishPlace(true); break;
       case "place-cancel": finishPlace(false); break;
