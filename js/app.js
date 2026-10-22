@@ -30,6 +30,7 @@
     fs: null,                              // 全画面スライドエディタ
     persisted: false, storage: null,
     passed: new Set(), stall: 0,           // 再生中に通過した埋め込み／読み込み待ちの累積
+    copyIns: null,                         // 「⧉ コピー」でコピー先を選んでいる埋め込み
   };
 
   function normalizeProject(saved) {
@@ -924,12 +925,22 @@
       <div class="row"><button class="btn btn-sm btn-primary" data-action="ins-new">＋ 新しい埋め込みを作る（全画面エディタ）</button></div>
       ${P.inserts.length ? P.inserts.map((x) => `
       <div class="ins-item">
-        <span class="n">${esc(INS.label(x))}</span>
+        <span class="n" title="${esc(INS.label(x))}">${esc(INS.label(x))}</span>
         <span class="small">${x.at != null ? `📍 元 ${TL.fmtMs(x.at)}` : "未配置"}　${INS.duration(x).toFixed(1)}秒</span>
         <button class="btn btn-sm btn-primary" data-action="ins-open" data-id="${x.id}">⛶ 開く</button>
         <button class="btn btn-sm" data-action="ins-preview" data-id="${x.id}">▶</button>
         <button class="btn btn-sm" data-action="ins-place" data-id="${x.id}">📍</button>
+        <button class="btn btn-sm" data-action="ins-rename" data-id="${x.id}" title="名前を付ける">✏</button>
+        <button class="btn btn-sm ${S.copyIns === x.id ? "btn-primary" : ""}" data-action="ins-copy-toggle" data-id="${x.id}" title="別のプロジェクトへコピー／複製">⧉</button>
         <button class="btn btn-sm btn-danger" data-action="ins-del" data-id="${x.id}">✕</button>
+        ${S.copyIns === x.id ? `
+        <div class="row" style="width:100%;margin-top:4px">
+          <span class="small">コピー先</span>
+          <select id="ins-copy-target" style="flex:1;padding:6px 8px;border:1px solid var(--line-2);border-radius:7px;background:var(--bg-2);color:var(--text);font:inherit;font-size:12px">
+            ${store.list().map((p) => `<option value="${p.id}" ${p.id === P.id ? "selected" : ""}>${esc(p.name || "動画")}${p.id === P.id ? "（このプロジェクト内に複製）" : ""}</option>`).join("")}
+          </select>
+          <button class="btn btn-sm btn-primary" data-action="ins-copy-run" data-id="${x.id}">コピー実行</button>
+        </div>` : ""}
       </div>`).join("") : `<div class="note">文字・画像・動画のページや、複数動画のモンタージュを全画面エディタで作り、本編の好きな位置に埋め込めます。「📍」で再生バーの位置をクリック → 決定。</div>`}
       ${Object.keys(runtime.missing || {}).length ? mediaStatusHtml() : ""}`;
   }
@@ -987,6 +998,70 @@
     if (ok && d && S.placeAt != null) { d.at = S.placeAt; save(); toast(`${INS.label(d)} を 元 ${TL.fmtMs(d.at)} の直前に配置しました`); }
     S.place = null; S.placeAt = null;
     renderModeBar(); renderTimeline(); renderPanel(); setT(S.T, { pause: true });
+  }
+  // ---------- 埋め込みの名前・コピー ----------
+  function renameDeck(id) {
+    const x = deckById(id);
+    if (!x) return;
+    const name = prompt("埋め込みの名前（空にすると自動の名前になります）", x.name || "");
+    if (name == null) return;
+    x.name = name.trim().slice(0, 40);
+    save(); renderPanel(); renderTimeline();
+    if (S.fs && S.fs.deckId === id) renderFs();
+  }
+  async function copyBlobTo(from, to, kind, loadNow) {
+    const b = await store.getBlob(from);
+    if (!b) return false;
+    await store.putBlob(to, b);
+    if (loadNow) {
+      try {
+        if (kind === "video") runtime.videos[to] = await loadVideoEl(b, to);
+        else runtime.images[to] = await loadImageEl(b);
+      } catch (e) { console.warn(e); }
+    }
+    return true;
+  }
+  // デッキを完全に複製（動画・画像も別IDでコピー）。loadNow=true なら今すぐ再生できる状態にする
+  async function cloneDeck(src, loadNow) {
+    const c = JSON.parse(JSON.stringify(src));
+    c.id = store.uid("ins"); c.at = null;
+    const gmap = {}, groups = {};
+    for (const gid in c.groups || {}) { const n = store.uid("g"); gmap[gid] = n; groups[n] = c.groups[gid]; }
+    c.groups = groups;
+    let missing = 0;
+    for (const pg of c.pages) {
+      pg.id = store.uid("s");
+      pg.group = pg.group ? gmap[pg.group] || null : null;
+      pg.ranges = (pg.ranges || []).map((r) => Object.assign({}, r, { id: store.uid("r") }));
+      if (pg.video) {
+        const nid = store.uid("v");
+        if (await copyBlobTo(pg.video.id, nid, "video", loadNow)) pg.video = Object.assign({}, pg.video, { id: nid });
+        else { missing++; pg.video = null; pg.ranges = []; if (pg.kind === "montage") { pg.kind = "slide"; pg.group = null; } }
+      }
+      const imgs = [];
+      for (const im of pg.images || []) {
+        const nid = store.uid("i");
+        if (await copyBlobTo(im.id, nid, "image", loadNow)) imgs.push(Object.assign({}, im, { id: nid })); else missing++;
+      }
+      pg.images = imgs;
+    }
+    for (const gid in c.groups) if (!c.pages.some((p) => p.group === gid)) delete c.groups[gid];
+    return { deck: INS.normalize(c), missing };
+  }
+  async function copyDeckTo(deckId, targetId) {
+    const src = deckById(deckId);
+    if (!src) return;
+    const toSelf = targetId === P.id;
+    const tp = toSelf ? P : store.getProject(targetId);
+    if (!tp) { toast("コピー先が見つかりません"); return; }
+    toast("コピー中…（動画・画像も複製しています）");
+    const r = await cloneDeck(src, toSelf);
+    r.deck.name = src.name ? `${src.name}（コピー）` : "";
+    if (toSelf) { P.inserts.push(r.deck); save(); }
+    else { tp.inserts = Array.isArray(tp.inserts) ? tp.inserts : []; tp.inserts.push(r.deck); store.saveProject(tp); }
+    S.copyIns = null;
+    renderPanel();
+    toast(`${toSelf ? "このプロジェクト内に複製しました" : `「${tp.name}」にコピーしました（タブを切り替えると使えます）`}${r.missing ? `　⚠ 読み込めない動画・画像 ${r.missing}件は含まれていません` : ""}`);
   }
   function deleteDeck(id) {
     const x = deckById(id);
@@ -1547,6 +1622,9 @@
       case "ins-place": startPlace(id); break;
       case "ins-unplace": { const x = deckById(id); if (x) { x.at = null; save(); renderPanel(); renderTimeline(); setT(Math.min(S.T, info().total), { pause: true }); toast("配置を外しました（埋め込み自体は残ります）"); } break; }
       case "ins-del": deleteDeck(id); break;
+      case "ins-rename": renameDeck(id); break;
+      case "ins-copy-toggle": S.copyIns = S.copyIns === id ? null : id; renderPanel(); break;
+      case "ins-copy-run": await copyDeckTo(id, val("ins-copy-target") || P.id); break;
       case "place-end": S.placeAt = R.info(P).srcTotal; renderModeBar(); renderTimeline(); break;
       case "place-ok": finishPlace(true); break;
       case "place-cancel": finishPlace(false); break;
